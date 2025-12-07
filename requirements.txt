@@ -1,19 +1,25 @@
 Flask==3.0.2
 gunicorn==21.2.0
 
+# HTTP + Environment
 requests==2.31.0
 python-dotenv==1.0.1
 
-# Finance
+# Data & Finance
 yfinance==0.2.37
 pandas==2.1.4
 numpy==1.26.4
 
-# AI
-openai==1.3.0
+# PDF generation
+reportlab==4.2.2
 
-# PDF/Charts
-matplotlib==3.8.2
-reportlab==4.2
+# ensure latest date parsing + timezone handling
+pytz==2024.1
 
-# Square (requests only version)
+# BeautifulSoup is optional, but yfinance sometimes uses it
+beautifulsoup4==4.12.3
+
+# For SVG → PNG etc. (optional, but safe)
+lxml==5.2.1
+
+
