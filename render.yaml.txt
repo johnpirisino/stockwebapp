@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: stock-analyzer-web
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app"
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FINANCIAL_DATASETS_API_KEY
+        sync: false
+      - key: SQUARE_ACCESS_TOKEN
+        sync: false
+      - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_BASE_URL
+        value: "https://connect.squareupsandbox.com"
