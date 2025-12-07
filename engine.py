@@ -1,4 +1,4 @@
-﻿# engine.py
+# engine.py
 import os
 import json
 import traceback
@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")  # headless backend for Render
 import matplotlib.pyplot as plt
 
 from reportlab.platypus import (
@@ -22,6 +22,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
+
 
 # =========================================
 # Environment / config
@@ -102,7 +103,11 @@ def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
         day_change_dollar = None
 
     # 1-year data
-    hist_1y = t.history(period="1y")
+    try:
+        hist_1y = t.history(period="1y")
+    except Exception:
+        hist_1y = None
+
     year_low = year_high = change_1y_pct = None
 
     if hist_1y is not None and not hist_1y.empty:
@@ -484,7 +489,7 @@ def generate_ai_freelancing_single(symbol: str):
 
 
 # =========================================
-# AI Combined comparison (used as AI Fundamental + Freelancing for two-ticker)
+# AI Combined comparison (two-ticker)
 # =========================================
 
 def generate_ai_combined_pair(
@@ -742,7 +747,7 @@ def build_compare_charts(s1: str, s2: str) -> Optional[str]:
 
 
 # =========================================
-# PDF export (shared for single + compare)
+# PDF export
 # =========================================
 
 def is_real_section_header(text: str) -> bool:
@@ -992,7 +997,7 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No insider trades.")
     lines.append("")
 
-    # Institutional (top 10, simple)
+    # Institutional (top 10)
     lines.append("INSTITUTIONAL OWNERSHIP (Top 10)")
     lines.append("-" * 72)
     if inst:
@@ -1119,10 +1124,16 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
         s2_num_line("P/E Ratio", (fm1 or {}).get("price_to_earnings_ratio"), (fm2 or {}).get("price_to_earnings_ratio"))
         s2_num_line("P/B Ratio", (fm1 or {}).get("price_to_book_ratio"), (fm2 or {}).get("price_to_book_ratio"))
         s2_num_line("P/S Ratio", (fm1 or {}).get("price_to_sales_ratio"), (fm2 or {}).get("price_to_sales_ratio"))
-        s2_num_line("EV/EBITDA", (fm1 or {}).get("enterprise_value_to_ebitda_ratio"),
-                    (fm2 or {}).get("enterprise_value_to_ebitda_ratio"))
-        s2_num_line("EV/Sales", (fm1 or {}).get("enterprise_value_to_revenue_ratio"),
-                    (fm2 or {}).get("enterprise_value_to_revenue_ratio"))
+        s2_num_line(
+            "EV/EBITDA",
+            (fm1 or {}).get("enterprise_value_to_ebitda_ratio"),
+            (fm2 or {}).get("enterprise_value_to_ebitda_ratio")
+        )
+        s2_num_line(
+            "EV/Sales",
+            (fm1 or {}).get("enterprise_value_to_revenue_ratio"),
+            (fm2 or {}).get("enterprise_value_to_revenue_ratio")
+        )
         s2_num_line("Gross Margin", (fm1 or {}).get("gross_margin"), (fm2 or {}).get("gross_margin"))
         s2_num_line("Op Margin", (fm1 or {}).get("operating_margin"), (fm2 or {}).get("operating_margin"))
         s2_num_line("Net Margin", (fm1 or {}).get("net_margin"), (fm2 or {}).get("net_margin"))
@@ -1194,9 +1205,15 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
             ltxt = "N/A"
             rtxt = "N/A"
             if left:
-                ltxt = f"{left.get('transaction_date','N/A')} {left.get('name','N/A')[:20]:20} Sh:{fmt_int(left.get('transaction_shares'))}"
+                ltxt = (
+                    f"{left.get('transaction_date','N/A')} "
+                    f"{left.get('name','N/A')[:20]:20} Sh:{fmt_int(left.get('transaction_shares'))}"
+                )
             if right:
-                rtxt = f"{right.get('transaction_date','N/A')} {right.get('name','N/A')[:20]:20} Sh:{fmt_int(right.get('transaction_shares'))}"
+                rtxt = (
+                    f"{right.get('transaction_date','N/A')} "
+                    f"{right.get('name','N/A')[:20]:20} Sh:{fmt_int(right.get('transaction_shares'))}"
+                )
             lines.append(f"{ltxt:<40}    {rtxt:<40}")
     lines.append("")
 
