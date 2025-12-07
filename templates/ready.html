@@ -1,0 +1,13 @@
+﻿{% extends "base.html" %}
+{% block content %}
+
+<div class="card-premium mx-auto text-center">
+
+    <h2 style="color:#09ffc9;">Your Report Is Ready</h2>
+    <p class="mt-3">Click the button below to download your PDF.</p>
+
+    <a class="btn-premium mt-4" href="/download/{{ job_id }}">Download PDF</a>
+
+</div>
+
+{% endblock %}
