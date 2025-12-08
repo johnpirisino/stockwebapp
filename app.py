@@ -1,32 +1,30 @@
-﻿# app.py
+# app.py
 import os
 import uuid
 import threading
 import requests
-from datetime import datetime
 
 from flask import (
     Flask, render_template, request, redirect,
     url_for, jsonify, send_file
 )
 
-from engine import run_single_to_pdf, run_compare_to_pdf
+from engine import run_single_to_pdf, run_compare_to_pdf, search_tickers
 
 app = Flask(__name__)
 
 # ---------------------------------------
-# LOAD ENVIRONMENT VALUES
+# ENVIRONMENT VALUES
 # ---------------------------------------
 SQUARE_ACCESS_TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
-SQUARE_LOCATION_ID  = os.getenv("SQUARE_LOCATION_ID")
-SQUARE_BASE_URL     = os.getenv("SQUARE_BASE_URL")  
-SQUARE_ENV          = "production"
+SQUARE_LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
+SQUARE_BASE_URL = os.getenv("SQUARE_BASE_URL", "https://connect.squareup.com")
 
-print("Using Square environment:", SQUARE_ENV)
-print("Square Base URL:", SQUARE_BASE_URL)
+ACCESS_CODE = os.getenv("ACCESS_CODE", "")  # required code to use app
+
 
 # ---------------------------------------
-# CREATE PAYMENT LINK
+# CREATE PAYMENT LINK (no SDK)
 # ---------------------------------------
 def create_payment_link(amount_cents: int, description: str, redirect_url: str):
     url = f"{SQUARE_BASE_URL}/v2/online-checkout/payment-links"
@@ -34,7 +32,7 @@ def create_payment_link(amount_cents: int, description: str, redirect_url: str):
     headers = {
         "Square-Version": "2024-01-18",
         "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     body = {
@@ -47,28 +45,30 @@ def create_payment_link(amount_cents: int, description: str, redirect_url: str):
                     "quantity": "1",
                     "base_price_money": {
                         "amount": amount_cents,
-                        "currency": "USD"
-                    }
+                        "currency": "USD",
+                    },
                 }
-            ]
+            ],
         },
         "checkout_options": {
-            "redirect_url": redirect_url
-        }
+            "redirect_url": redirect_url,
+        },
     }
 
-    response = requests.post(url, json=body, headers=headers)
-    data = response.json()
+    resp = requests.post(url, json=body, headers=headers, timeout=20)
+    data = resp.json()
 
-    if response.status_code == 200:
+    if resp.status_code == 200:
         return data["payment_link"]["url"]
     else:
-        raise RuntimeError(f"Square checkout error {response.status_code}: {data}")
+        raise RuntimeError(f"Square checkout error {resp.status_code}: {data}")
+
 
 # ---------------------------------------
-# JOB STORE
+# IN-MEMORY JOBS
 # ---------------------------------------
 jobs = {}
+
 
 def run_job(job_id: str):
     job = jobs[job_id]
@@ -90,18 +90,36 @@ def run_job(job_id: str):
         job["status"] = "error"
         job["error"] = str(e)
 
+
 # ---------------------------------------
 # ROUTES
 # ---------------------------------------
 
 @app.route("/")
 def index():
+    # No pre-populated values, force user to enter each time.
     return render_template("index.html")
+
+
+@app.route("/lookup_ticker")
+def lookup_ticker_route():
+    query = request.args.get("q", "").strip()
+    results = search_tickers(query, limit=10)
+    return jsonify(results)
+
 
 @app.route("/create_checkout", methods=["POST"])
 def create_checkout_route():
+    access_code_entered = request.form.get("access_code", "").strip()
     ticker1 = request.form.get("ticker1", "").upper().strip()
     ticker2 = request.form.get("ticker2", "").upper().strip()
+
+    # Require access code
+    if ACCESS_CODE and access_code_entered != ACCESS_CODE:
+        return render_template(
+            "index.html",
+            error="Invalid access code. Please contact John for access.",
+        )
 
     if not ticker1:
         return render_template("index.html", error="Ticker 1 is required.")
@@ -122,17 +140,23 @@ def create_checkout_route():
         "error": None,
         "mode": mode,
         "ticker1": ticker1,
-        "ticker2": ticker2
+        "ticker2": ticker2,
     }
 
     success_redirect = url_for("processing", job_id=job_id, _external=True)
 
+    # Create Square Checkout Link
     try:
-        pay_url = create_payment_link(amount, desc, success_redirect)
+        pay_url = create_payment_link(
+            amount_cents=amount,
+            description=desc,
+            redirect_url=success_redirect,
+        )
     except Exception as e:
         return render_template("index.html", error=str(e))
 
     return redirect(pay_url)
+
 
 @app.route("/processing/<job_id>")
 def processing(job_id):
@@ -144,6 +168,7 @@ def processing(job_id):
 
     return render_template("processing.html", job_id=job_id)
 
+
 @app.route("/job_status/<job_id>")
 def job_status(job_id):
     if job_id not in jobs:
@@ -151,21 +176,17 @@ def job_status(job_id):
 
     return jsonify({
         "status": jobs[job_id]["status"],
-        "error": jobs[job_id]["error"]
+        "error": jobs[job_id]["error"],
     })
 
-# ---------------------------------------------------
-# NEW — READY PAGE (this prevents auto-download)
-# ---------------------------------------------------
+
 @app.route("/ready/<job_id>")
 def ready(job_id):
-    job = jobs.get(job_id)
-    if not job:
+    if job_id not in jobs:
         return "Invalid job ID", 404
-    if job["status"] != "done":
-        return "Report not finished yet", 400
+    job = jobs[job_id]
+    return render_template("ready.html", job_id=job_id, job=job)
 
-    return render_template("ready.html", job_id=job_id)
 
 @app.route("/download/<job_id>")
 def download(job_id):
@@ -173,17 +194,17 @@ def download(job_id):
         return "Invalid job ID", 404
 
     job = jobs[job_id]
+
     if job["status"] != "done":
         return "File not ready", 400
 
     return send_file(
         job["file_path"],
         as_attachment=True,
-        download_name=os.path.basename(job["file_path"])
+        download_name=os.path.basename(job["file_path"]),
     )
 
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
 
+if __name__ == "__main__":
+    # Railway will run via gunicorn; this is just for local testing
+    app.run(debug=True)
