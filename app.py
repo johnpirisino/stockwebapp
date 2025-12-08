@@ -9,24 +9,42 @@ from flask import (
     url_for, jsonify, send_file
 )
 
-from engine import run_single_to_pdf, run_compare_to_pdf, search_tickers
+from engine import run_single_to_pdf, run_compare_to_pdf
 
 app = Flask(__name__)
 
 # ---------------------------------------
-# ENVIRONMENT VALUES
+# ENVIRONMENT
 # ---------------------------------------
 SQUARE_ACCESS_TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
-SQUARE_LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
-SQUARE_BASE_URL = os.getenv("SQUARE_BASE_URL", "https://connect.squareup.com")
-
-ACCESS_CODE = os.getenv("ACCESS_CODE", "")  # required code to use app
-
+SQUARE_LOCATION_ID  = os.getenv("SQUARE_LOCATION_ID")
+SQUARE_BASE_URL     = os.getenv("SQUARE_BASE_URL", "https://connect.squareup.com")
+USE_SQUARE          = os.getenv("SQUARE", "N").upper() == "Y"   # <— controls payment
 
 # ---------------------------------------
-# CREATE PAYMENT LINK (no SDK)
+# JOB STORE
 # ---------------------------------------
-def create_payment_link(amount_cents: int, description: str, redirect_url: str):
+jobs = {}
+# job_id -> {
+#   "status": pending|running|done|error,
+#   "file_path": str|None,
+#   "error": str|None,
+#   "mode": "single"|"compare",
+#   "ticker1": str,
+#   "ticker2": str
+# }
+
+# ---------------------------------------
+# OPTIONAL: CREATE PAYMENT LINK (Square)
+# ---------------------------------------
+def create_payment_link(amount_cents: int, description: str, redirect_url: str) -> str:
+    """
+    Uses Square HTTP API directly (no SDK).
+    Only called when USE_SQUARE is True.
+    """
+    if not (SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID):
+        raise RuntimeError("Square is enabled but ACCESS_TOKEN or LOCATION_ID is missing.")
+
     url = f"{SQUARE_BASE_URL}/v2/online-checkout/payment-links"
 
     headers = {
@@ -51,7 +69,7 @@ def create_payment_link(amount_cents: int, description: str, redirect_url: str):
             ],
         },
         "checkout_options": {
-            "redirect_url": redirect_url,
+            "redirect_url": redirect_url
         },
     }
 
@@ -60,16 +78,13 @@ def create_payment_link(amount_cents: int, description: str, redirect_url: str):
 
     if resp.status_code == 200:
         return data["payment_link"]["url"]
-    else:
-        raise RuntimeError(f"Square checkout error {resp.status_code}: {data}")
+
+    raise RuntimeError(f"Square error {resp.status_code}: {data}")
 
 
 # ---------------------------------------
-# IN-MEMORY JOBS
+# BACKGROUND JOB RUNNER
 # ---------------------------------------
-jobs = {}
-
-
 def run_job(job_id: str):
     job = jobs[job_id]
     job["status"] = "running"
@@ -79,11 +94,11 @@ def run_job(job_id: str):
         os.makedirs(out_dir, exist_ok=True)
 
         if job["mode"] == "single":
-            file_path = run_single_to_pdf(job["ticker1"], out_dir)
+            fp = run_single_to_pdf(job["ticker1"], out_dir)
         else:
-            file_path = run_compare_to_pdf(job["ticker1"], job["ticker2"], out_dir)
+            fp = run_compare_to_pdf(job["ticker1"], job["ticker2"], out_dir)
 
-        job["file_path"] = file_path
+        job["file_path"] = fp
         job["status"] = "done"
 
     except Exception as e:
@@ -95,44 +110,31 @@ def run_job(job_id: str):
 # ROUTES
 # ---------------------------------------
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def index():
-    # No pre-populated values, force user to enter each time.
-    return render_template("index.html")
-
-
-@app.route("/lookup_ticker")
-def lookup_ticker_route():
-    query = request.args.get("q", "").strip()
-    results = search_tickers(query, limit=10)
-    return jsonify(results)
+    # Do NOT pre-populate last-used tickers
+    return render_template("index.html", error=None)
 
 
 @app.route("/create_checkout", methods=["POST"])
-def create_checkout_route():
-    access_code_entered = request.form.get("access_code", "").strip()
+def create_checkout():
     ticker1 = request.form.get("ticker1", "").upper().strip()
     ticker2 = request.form.get("ticker2", "").upper().strip()
-
-    # Require access code
-    if ACCESS_CODE and access_code_entered != ACCESS_CODE:
-        return render_template(
-            "index.html",
-            error="Invalid access code. Please contact John for access.",
-        )
 
     if not ticker1:
         return render_template("index.html", error="Ticker 1 is required.")
 
+    # Decide mode & price
     if ticker2:
         mode = "compare"
-        amount = 1500
+        amount = 1500   # $15.00
         desc = f"Two-ticker analysis: {ticker1} vs {ticker2}"
     else:
         mode = "single"
-        amount = 1000
+        amount = 1000   # $10.00
         desc = f"Single-ticker analysis: {ticker1}"
 
+    # Create job
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "pending",
@@ -143,27 +145,29 @@ def create_checkout_route():
         "ticker2": ticker2,
     }
 
-    success_redirect = url_for("processing", job_id=job_id, _external=True)
+    # If Square is disabled, go straight to processing
+    if not USE_SQUARE:
+        return redirect(url_for("processing", job_id=job_id))
 
-    # Create Square Checkout Link
+    # If Square enabled, redirect user to payment page
+    redirect_url = url_for("processing", job_id=job_id, _external=True)
     try:
-        pay_url = create_payment_link(
-            amount_cents=amount,
-            description=desc,
-            redirect_url=success_redirect,
-        )
+        pay_url = create_payment_link(amount_cents=amount, description=desc, redirect_url=redirect_url)
     except Exception as e:
-        return render_template("index.html", error=str(e))
+        # On error, show message and allow retry
+        return render_template("index.html", error=f"Payment error: {e}")
 
     return redirect(pay_url)
 
 
 @app.route("/processing/<job_id>")
 def processing(job_id):
-    if job_id not in jobs:
-        return "Invalid job ID", 404
+    job = jobs.get(job_id)
+    if not job:
+        return "Invalid job id.", 404
 
-    if jobs[job_id]["status"] == "pending":
+    if job["status"] == "pending":
+        # Kick off background thread
         threading.Thread(target=run_job, args=(job_id,), daemon=True).start()
 
     return render_template("processing.html", job_id=job_id)
@@ -171,33 +175,28 @@ def processing(job_id):
 
 @app.route("/job_status/<job_id>")
 def job_status(job_id):
-    if job_id not in jobs:
+    job = jobs.get(job_id)
+    if not job:
         return jsonify({"status": "unknown"}), 404
-
-    return jsonify({
-        "status": jobs[job_id]["status"],
-        "error": jobs[job_id]["error"],
-    })
+    return jsonify({"status": job["status"], "error": job["error"]})
 
 
 @app.route("/ready/<job_id>")
 def ready(job_id):
-    if job_id not in jobs:
-        return "Invalid job ID", 404
-    job = jobs[job_id]
-    return render_template("ready.html", job_id=job_id, job=job)
+    job = jobs.get(job_id)
+    if not job:
+        return "Invalid job id.", 404
+    if job["status"] != "done":
+        return redirect(url_for("processing", job_id=job_id))
+    filename = os.path.basename(job["file_path"])
+    return render_template("ready.html", job_id=job_id, filename=filename)
 
 
 @app.route("/download/<job_id>")
 def download(job_id):
-    if job_id not in jobs:
-        return "Invalid job ID", 404
-
-    job = jobs[job_id]
-
-    if job["status"] != "done":
-        return "File not ready", 400
-
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return "File not ready.", 400
     return send_file(
         job["file_path"],
         as_attachment=True,
@@ -205,6 +204,42 @@ def download(job_id):
     )
 
 
+# ---------------------------------------
+# TICKER LOOKUP PAGE
+# ---------------------------------------
+
+YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+
+@app.route("/lookup", methods=["GET"])
+def lookup():
+    query = request.args.get("q", "").strip()
+    results = []
+    error = None
+
+    if query:
+        try:
+            resp = requests.get(
+                YAHOO_SEARCH_URL,
+                params={"q": query, "quotesCount": 10, "newsCount": 0},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for q in data.get("quotes", []):
+                    results.append({
+                        "symbol": q.get("symbol"),
+                        "shortname": q.get("shortname") or q.get("longname") or "",
+                        "exch": q.get("exchDisp") or "",
+                        "type": q.get("quoteType") or "",
+                    })
+            else:
+                error = f"Yahoo search error {resp.status_code}"
+        except Exception as e:
+            error = f"Lookup error: {e}"
+
+    return render_template("lookup.html", query=query, results=results, error=error)
+
+
 if __name__ == "__main__":
-    # Railway will run via gunicorn; this is just for local testing
+    # Railway will use gunicorn via Procfile, but this lets you test locally.
     app.run(debug=True)
