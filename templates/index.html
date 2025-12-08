@@ -1,26 +1,106 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block content %}
 
-<div class="card-premium mx-auto">
-    <h2 class="text-center mb-4" style="color:#09ffc9;">Stock Analyzer</h2>
+<div class="card-premium mx-auto text-center">
+  <h2>AI Stock Report</h2>
+  <p class="subtitle">
+    Enter your access code and one or two stock tickers.  
+    We’ll generate a PDF report after payment.
+  </p>
 
-    {% if error %}
-    <div class="error-box mb-3">{{ error }}</div>
-    {% endif %}
+  {% if error %}
+    <div class="error-box">{{ error }}</div>
+  {% endif %}
 
-    <form method="POST" action="/create_checkout">
-        <div class="mb-3">
-            <label class="form-label">Ticker 1</label>
-            <input type="text" class="form-control" name="ticker1" required>
-        </div>
+  <form method="POST" action="{{ url_for('create_checkout_route') }}" autocomplete="off">
+    <div class="form-group">
+      <label for="access_code">Access Code</label>
+      <input
+        type="password"
+        id="access_code"
+        name="access_code"
+        placeholder="Enter your access code"
+        required
+        autocomplete="off"
+      />
+    </div>
 
-        <div class="mb-4">
-            <label class="form-label">Ticker 2 (optional for comparison)</label>
-            <input type="text" class="form-control" name="ticker2">
-        </div>
+    <div class="form-group">
+      <label for="ticker1">Ticker 1 (required)</label>
+      <input
+        type="text"
+        id="ticker1"
+        name="ticker1"
+        placeholder="e.g. AAPL"
+        required
+        autocomplete="off"
+        list="ticker1_list"
+      />
+      <datalist id="ticker1_list"></datalist>
+      <small>Start typing a company name or symbol to look it up.</small>
+    </div>
 
-        <button class="btn-premium w-100">Run Analyzer</button>
-    </form>
+    <div class="form-group">
+      <label for="ticker2">Ticker 2 (optional)</label>
+      <input
+        type="text"
+        id="ticker2"
+        name="ticker2"
+        placeholder="e.g. MSFT"
+        autocomplete="off"
+        list="ticker2_list"
+      />
+      <datalist id="ticker2_list"></datalist>
+      <small>Leave blank for a single-stock report.</small>
+    </div>
+
+    <button type="submit" class="btn-primary">
+      Continue to Payment
+    </button>
+  </form>
 </div>
+
+<script>
+function setupTickerLookup(inputId, listId) {
+  const input = document.getElementById(inputId);
+  const list = document.getElementById(listId);
+  if (!input || !list) return;
+
+  let timer = null;
+
+  input.addEventListener("input", function () {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (q.length < 2) {
+      list.innerHTML = "";
+      return;
+    }
+
+    timer = setTimeout(() => {
+      fetch("/lookup_ticker?q=" + encodeURIComponent(q))
+        .then((r) => r.json())
+        .then((data) => {
+          list.innerHTML = "";
+          (data || []).forEach((item) => {
+            const opt = document.createElement("option");
+            opt.value = item.ticker;
+            if (item.name) {
+              opt.label = item.ticker + " — " + item.name;
+            }
+            list.appendChild(opt);
+          });
+        })
+        .catch((err) => {
+          console.log("lookup error", err);
+        });
+    }, 300);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+  setupTickerLookup("ticker1", "ticker1_list");
+  setupTickerLookup("ticker2", "ticker2_list");
+});
+</script>
 
 {% endblock %}
