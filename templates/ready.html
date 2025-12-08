@@ -1,13 +1,23 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 {% block content %}
 
 <div class="card-premium mx-auto text-center">
+  <h2>✅ Your PDF is ready</h2>
+  <p class="mt-3">
+    Click the button below to download your stock analysis report.
+  </p>
 
-    <h2 style="color:#09ffc9;">Your Report Is Ready</h2>
-    <p class="mt-3">Click the button below to download your PDF.</p>
+  <a href="{{ url_for('download', job_id=job_id) }}" class="btn-primary">
+    Download PDF
+  </a>
 
-    <a class="btn-premium mt-4" href="/download/{{ job_id }}">Download PDF</a>
+  <p class="mt-4">
+    Want another report? Just go back to the home page and run a new one.
+  </p>
 
+  <a href="{{ url_for('index') }}" class="btn-secondary">
+    Run Another Analysis
+  </a>
 </div>
 
 {% endblock %}
