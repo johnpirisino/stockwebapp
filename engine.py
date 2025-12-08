@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 import matplotlib
-matplotlib.use("Agg")  # headless
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from reportlab.platypus import (
@@ -23,23 +23,16 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
 
-# =========================================
-# Environment / config
-# =========================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FD_API_KEY = os.getenv("FINANCIAL_DATASETS_API_KEY")
-
 FD_BASE_URL = "https://api.financialdatasets.ai"
 
 
-# =========================================
-# Helpers
-# =========================================
-
+# ----------------- helpers -----------------
 def fmt_number(value, decimals=2):
     try:
         if value is None:
@@ -62,80 +55,7 @@ def fd_headers():
     return {"X-API-KEY": FD_API_KEY} if FD_API_KEY else {}
 
 
-# =========================================
-# Ticker search (for lookup boxes)
-# =========================================
-
-def search_tickers(query: str, limit: int = 10) -> List[Dict[str, str]]:
-    """
-    Search for tickers by symbol or company name.
-
-    1) Try FinancialDatasets 'available tickers' endpoint.
-    2) Fallback to Yahoo Finance search if FD not available or fails.
-    """
-    query = (query or "").strip()
-    if not query:
-        return []
-    q = query.lower()
-
-    # 1) Try FinancialDatasets tickers
-    if FD_API_KEY:
-        try:
-            url = f"{FD_BASE_URL}/financials/income-statements/tickers/"
-            r = requests.get(url, headers=fd_headers(), timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                results: List[Dict[str, str]] = []
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, str):
-                            symbol = item
-                            name = ""
-                        elif isinstance(item, dict):
-                            symbol = item.get("ticker") or item.get("symbol") or ""
-                            name = (
-                                item.get("name")
-                                or item.get("company_name")
-                                or item.get("short_name")
-                                or ""
-                            )
-                        else:
-                            continue
-
-                        full_text = f"{symbol} {name}".lower()
-                        if q in full_text:
-                            results.append({"ticker": symbol, "name": name})
-                        if len(results) >= limit:
-                            break
-                if results:
-                    return results
-        except Exception:
-            pass
-
-    # 2) Fallback: Yahoo Finance search (lighter endpoint than full yfinance.info)
-    try:
-        url = "https://query2.finance.yahoo.com/v1/finance/search"
-        params = {"q": query, "quotesCount": limit, "newsCount": 0}
-        r = requests.get(url, params=params, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            out = []
-            for qd in data.get("quotes", []):
-                symbol = qd.get("symbol")
-                name = qd.get("shortname") or qd.get("longname") or ""
-                if symbol:
-                    out.append({"ticker": symbol, "name": name})
-            return out
-    except Exception:
-        pass
-
-    return []
-
-
-# =========================================
-# Yahoo Finance Snapshot (robust 1Y + day change)
-# =========================================
-
+# ----------------- yfinance snapshot -----------------
 def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
     t = yf.Ticker(symbol)
 
@@ -149,29 +69,23 @@ def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
     industry = info.get("industry", "N/A")
     website = info.get("website", "N/A")
 
-    # 1-day data
+    # 1-day
     try:
         hist_1d = t.history(period="1d")
         if hist_1d is not None and not hist_1d.empty:
             current_price = float(hist_1d["Close"].iloc[-1])
             open_price = float(hist_1d["Open"].iloc[-1])
-
-            if open_price and open_price != 0:
+            if open_price:
                 day_change_pct = ((current_price - open_price) / open_price) * 100
             else:
                 day_change_pct = None
-
             day_change_dollar = current_price - open_price
         else:
-            current_price = None
-            day_change_pct = None
-            day_change_dollar = None
+            current_price = day_change_pct = day_change_dollar = None
     except Exception:
-        current_price = None
-        day_change_pct = None
-        day_change_dollar = None
+        current_price = day_change_pct = day_change_dollar = None
 
-    # 1-year data
+    # 1Y
     hist_1y = t.history(period="1y")
     year_low = year_high = change_1y_pct = None
 
@@ -209,10 +123,7 @@ def fetch_yfinance_snapshot(symbol: str) -> Dict[str, Any]:
     }
 
 
-# =========================================
-# FinancialDatasets.ai Fetchers
-# =========================================
-
+# ----------------- FinancialDatasets fetchers -----------------
 def fetch_financial_metrics_snapshot(symbol: str):
     if not FD_API_KEY:
         return None, "FINANCIAL_DATASETS_API_KEY missing."
@@ -338,10 +249,7 @@ def fetch_financials(symbol: str):
         return None, str(e)
 
 
-# =========================================
-# Multi-year Fundamentals Table
-# =========================================
-
+# ----------------- multi-year fundamentals -----------------
 def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
     lines: List[str] = []
     if not financials:
@@ -367,13 +275,11 @@ def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
         if not report_period:
             continue
         year = report_period[:4]
-
         sales = item.get("revenue")
         gp = item.get("gross_profit")
         op = item.get("operating_income") or item.get("ebit")
         ni = item.get("net_income")
         eps = item.get("earnings_per_share")
-
         rows.append({
             "year": year,
             "sales": sales,
@@ -413,21 +319,17 @@ def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
         op = r["op"]
         ni = r["ni"]
         eps = r["eps"]
-
         r["gp_margin"] = pct(gp, s)
         r["op_margin"] = pct(op, s)
         r["ni_margin"] = pct(ni, s)
-
         if prev_sales not in (None, 0) and s not in (None, 0):
             r["sales_yoy"] = pct(s - prev_sales, prev_sales)
         else:
             r["sales_yoy"] = None
-
         if prev_eps not in (None, 0) and eps not in (None, 0):
             r["eps_yoy"] = pct(eps - prev_eps, prev_eps)
         else:
             r["eps_yoy"] = None
-
         prev_sales = s
         prev_eps = eps
 
@@ -451,13 +353,11 @@ def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
         op = fmt_int(r["op"])
         ni = fmt_int(r["ni"])
         eps = fmt_number(r["eps"], 2)
-
         gp_m = fmt_pct(r["gp_margin"])
         op_m = fmt_pct(r["op_margin"])
         ni_m = fmt_pct(r["ni_margin"])
         sy = fmt_pct(r["sales_yoy"])
         ey = fmt_pct(r["eps_yoy"])
-
         line = (
             f"{year:<6}"
             f"{s:>12} {gp:>12} {op:>12} {ni:>12} {eps:>7}  "
@@ -469,10 +369,7 @@ def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
     return lines
 
 
-# =========================================
-# OpenAI – AI Fundamental + AI Freelancing (single)
-# =========================================
-
+# ----------------- AI (single) -----------------
 def build_ai_single_prompt(symbol, yf_snapshot, fm_snapshot, analyst_estimates, company_facts):
     cik = (company_facts or {}).get("cik", "")
     return f"""
@@ -553,10 +450,7 @@ def generate_ai_freelancing_single(symbol: str):
         return f"Freelancing AI Error: {e}"
 
 
-# =========================================
-# AI Combined comparison (two tickers)
-# =========================================
-
+# ----------------- AI comparison -----------------
 def generate_ai_combined_pair(
     s1: str,
     d1: Dict[str, Any],
@@ -571,7 +465,6 @@ def generate_ai_combined_pair(
 ) -> str:
     if not OPENAI_API_KEY:
         return "OpenAI key missing; cannot generate AI comparison."
-
     client = OpenAI(api_key=OPENAI_API_KEY)
     prompt = f"""
 You are a senior equity analyst comparing two stocks: {s1} and {s2}.  
@@ -580,16 +473,7 @@ Do NOT use ### or ** markdown.
 Provide BOTH:
 
 1) AI FUNDAMENTAL COMPARISON SUMMARY  
-   - Compare their business models, competitive positions, growth, margins,
-     balance sheet quality, valuation, risks, and long-term outlook.  
-   - Explicitly note where one appears stronger/weaker vs the other.
-
 2) AI FREELANCING VIEW  
-   - "Tell me all I should know" about each stock for an informed investor:
-     strategy, key products/segments, major secular trends, management,
-     capital allocation, catalysts, red flags, and scenario analysis.  
-   - Weave this into the comparison, but make it clear which points
-     apply to {s1} and which to {s2}.
 
 Required sections in your answer:
 1. Business Overview & Competitive Position  
@@ -621,16 +505,12 @@ Data for {s2}:
         return f"AI Error: {e}\n{traceback.format_exc()}"
 
 
-# =========================================
-# Chart builders (single & compare)
-# =========================================
-
+# ----------------- charts -----------------
 def build_single_charts(symbol: str, fin_metrics_history: Optional[List[Dict[str, Any]]]) -> Optional[str]:
     try:
         hist = yf.Ticker(symbol).history(period="1y", interval="1d")
     except Exception:
         hist = None
-
     if hist is None or hist.empty:
         return None
 
@@ -654,10 +534,8 @@ def build_single_charts(symbol: str, fin_metrics_history: Optional[List[Dict[str
 
     fig, axs = plt.subplots(5, 1, figsize=(8.5, 11), sharex=False)
     fig.subplots_adjust(hspace=0.4)
-
     dates = hist.index
 
-    # Price + MAs
     ax_price = axs[0]
     ax_price.plot(dates, close, label="Close")
     ax_price.plot(dates, hist["MA20"], label="MA20", linewidth=0.8)
@@ -666,13 +544,11 @@ def build_single_charts(symbol: str, fin_metrics_history: Optional[List[Dict[str
     ax_price.set_title(f"{symbol} Price + Moving Averages")
     ax_price.legend(loc="upper left", fontsize=7)
 
-    # Volume
     ax_vol = axs[1]
     ax_vol.bar(dates, volume / 1_000_000.0, width=1.0)
     ax_vol.set_title("Daily Volume (M)")
     ax_vol.set_ylabel("Shares (M)")
 
-    # RSI
     ax_rsi = axs[2]
     ax_rsi.plot(dates, rsi)
     ax_rsi.axhline(70, color="red", linestyle="--", linewidth=0.8)
@@ -680,7 +556,6 @@ def build_single_charts(symbol: str, fin_metrics_history: Optional[List[Dict[str
     ax_rsi.set_title("RSI (14)")
     ax_rsi.set_ylim(0, 100)
 
-    # MACD
     ax_macd = axs[3]
     ax_macd.plot(dates, macd, label="MACD")
     ax_macd.plot(dates, signal, label="Signal", linestyle="--")
@@ -688,7 +563,6 @@ def build_single_charts(symbol: str, fin_metrics_history: Optional[List[Dict[str
     ax_macd.legend(fontsize=7)
     ax_macd.set_title("MACD (12/26/9)")
 
-    # Valuation history
     ax_val = axs[4]
     if fin_metrics_history:
         records = []
@@ -811,10 +685,7 @@ def build_compare_charts(s1: str, s2: str) -> Optional[str]:
     return img_path
 
 
-# =========================================
-# PDF export (shared for single + compare)
-# =========================================
-
+# ----------------- PDF export -----------------
 def is_real_section_header(text: str) -> bool:
     s = text.strip()
     if not s:
@@ -898,15 +769,12 @@ def export_pdf(text: str, title_line: str, chart_path: Optional[str], output_pat
     )
 
     story = []
-
-    # Title page
     story.append(Spacer(1, 2 * inch))
     story.append(Paragraph("John Pirisino's Stock Analyzer", title_style))
     story.append(Paragraph(title_line, descriptor_style))
     story.append(PageBreak())
 
     url_regex = r"(https?://[^\s]+)"
-
     import re
 
     for line in text.split("\n"):
@@ -944,10 +812,7 @@ def export_pdf(text: str, title_line: str, chart_path: Optional[str], output_pat
     doc.build(story)
 
 
-# =========================================
-# PUBLIC ENTRY POINTS (used by Flask app)
-# =========================================
-
+# ----------------- public entry points -----------------
 def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     symbol = symbol.upper()
     os.makedirs(out_dir, exist_ok=True)
@@ -964,7 +829,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
 
     lines: List[str] = []
 
-    # Snapshot
     lines.append("=" * 72)
     lines.append(f"STOCK SNAPSHOT: {symbol}")
     lines.append("=" * 72)
@@ -984,25 +848,20 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     lines.append(f"1Y Change (%)      : {fmt_number(yf_data['change_1y_pct'])}%")
     lines.append("")
 
-    # AI Fundamental
     lines.append("=" * 72)
     lines.append("AI FUNDAMENTAL SUMMARY")
     lines.append("=" * 72)
     lines.append("")
-    ai_fund = generate_ai_fundamental_single(symbol, yf_data, fm_snapshot, analyst, facts)
-    lines.append(ai_fund)
+    lines.append(generate_ai_fundamental_single(symbol, yf_data, fm_snapshot, analyst, facts))
     lines.append("")
 
-    # AI Freelancing
     lines.append("=" * 72)
     lines.append("AI FREELANCING SUMMARY")
     lines.append("=" * 72)
     lines.append("")
-    ai_free = generate_ai_freelancing_single(symbol)
-    lines.append(ai_free)
+    lines.append(generate_ai_freelancing_single(symbol))
     lines.append("")
 
-    # Company facts
     lines.append("COMPANY FACTS")
     lines.append("-" * 72)
     if facts:
@@ -1014,10 +873,8 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No company facts available.")
     lines.append("")
 
-    # Multi-year fundamentals
     lines.extend(build_fundamentals_table(financials or {}))
 
-    # Financial metrics snapshot
     lines.append("FINANCIAL METRICS SNAPSHOT")
     lines.append("-" * 72)
     if fm_snapshot:
@@ -1036,7 +893,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No snapshot metrics.")
     lines.append("")
 
-    # Analyst estimates
     lines.append("ANALYST ESTIMATES (Annual)")
     lines.append("-" * 72)
     if analyst:
@@ -1049,7 +905,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No analyst estimates.")
     lines.append("")
 
-    # Insider trades (top 5)
     lines.append("INSIDER TRADES (Recent)")
     lines.append("-" * 72)
     if insider:
@@ -1062,7 +917,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No insider trades.")
     lines.append("")
 
-    # Institutional (top 10, simple)
     lines.append("INSTITUTIONAL OWNERSHIP (Top 10)")
     lines.append("-" * 72)
     if inst:
@@ -1075,7 +929,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No institutional ownership data.")
     lines.append("")
 
-    # News
     lines.append("LATEST NEWS")
     lines.append("-" * 72)
     if news:
@@ -1087,10 +940,7 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No news available.")
     lines.append("")
 
-    # Charts
     chart_path = build_single_charts(symbol, fm_history)
-
-    # Output path
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
     title_line = f"{symbol} – {yf_data['long_name']}"
@@ -1136,13 +986,11 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
         right = f"{label:<12}{t2[:28]:<28}"
         lines.append(f"{left}    {right}")
 
-    # Header
     lines.append("=" * 72)
     lines.append(f"COMPARISON: {s1} vs {s2}")
     lines.append("=" * 72)
     lines.append("")
 
-    # Basic info
     lines.append("BASIC INFO")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1153,7 +1001,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     s2_text_line("Website", d1["website"], d2["website"])
     lines.append("")
 
-    # Price & performance
     lines.append("PRICE & PERFORMANCE")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1166,19 +1013,18 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     s2_num_line("1Y Change (%)", d1["change_1y_pct"], d2["change_1y_pct"])
     lines.append("")
 
-    # AI fundamentals + freelancing (combined narrative for both)
     lines.append("=" * 72)
     lines.append("AI FUNDAMENTAL & FREELANCING COMPARISON SUMMARY")
     lines.append("=" * 72)
     lines.append("")
-    ai_text = generate_ai_combined_pair(
-        s1, d1, fm1, analyst1, facts1,
-        s2, d2, fm2, analyst2, facts2
+    lines.append(
+        generate_ai_combined_pair(
+            s1, d1, fm1, analyst1, facts1,
+            s2, d2, fm2, analyst2, facts2
+        )
     )
-    lines.append(ai_text)
     lines.append("")
 
-    # Metrics snapshot
     lines.append("FINANCIAL METRICS SNAPSHOT")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1200,7 +1046,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
         lines.append("Metrics missing for one or both tickers.")
     lines.append("")
 
-    # Analyst estimates
     lines.append("ANALYST ESTIMATES (Annual)")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1221,7 +1066,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
             lines.append("")
     lines.append("")
 
-    # Institutional
     lines.append("INSTITUTIONAL OWNERSHIP (Top 5 by Shares)")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1249,7 +1093,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
             lines.append(f"{left_txt}    {right_txt}")
     lines.append("")
 
-    # Insider trades
     lines.append("INSIDER TRADES (Recent)")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
@@ -1270,7 +1113,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
             lines.append(f"{ltxt:<40}    {rtxt:<40}")
     lines.append("")
 
-    # News
     lines.append("LATEST NEWS")
     lines.append("-" * 72)
     lines.append(f"{s1:<60}{s2:<60}")
