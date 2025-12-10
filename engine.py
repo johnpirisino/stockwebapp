@@ -158,25 +158,43 @@ def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.Da
     return df, None
 
 
-def fetch_financial_metrics_snapshot(symbol: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """
-    /financial-metrics/snapshot
-    According to your schema, response is a single dict:
+def fetch_financial_metrics_snapshot(symbol: str):
+    if not FD_API_KEY:
+        print("❌ Missing FD_API_KEY")
+        return None, "Missing key"
 
-    {
-      "ticker": "AAPL",
-      "market_cap": ...,
-      "enterprise_value": ...,
-      ...
-    }
-    """
+    # Corrected required endpoint: note trailing slash
+    url = f"{FD_BASE_URL}/financial-metrics/snapshot/"
     params = {"ticker": symbol.upper()}
-    data, err = fd_get_json("/financial-metrics/snapshot", params)
-    if err or not data:
-        return None, err or "No snapshot metrics."
-    if not isinstance(data, dict):
-        return None, "Unexpected snapshot format (expected dict)."
-    return data, None
+
+    try:
+        r = requests.get(
+            url,
+            headers=fd_headers(),
+            params=params,
+            timeout=20,
+            allow_redirects=True   # 🚨 REQUIRED
+        )
+
+        print("DEBUG snapshot status:", r.status_code)
+        print("DEBUG snapshot URL:", r.url)
+        print("DEBUG snapshot text:", r.text[:300])
+
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {r.text[:200]}"
+
+        data = r.json()
+
+        # FD.ai wraps response inside keys sometimes
+        if "snapshot" in data:
+            return data["snapshot"], None
+
+        return data, None  # fallback (some accounts return raw JSON)
+
+    except Exception as e:
+        print("ERROR Snapshot:", str(e))
+        return None, str(e)
+
 
 
 def fetch_financial_metrics_history(symbol: str, period: str = "annual", limit: int = 10) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -1411,3 +1429,4 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file)
     return out_file
+
