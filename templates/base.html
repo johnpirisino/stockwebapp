@@ -3,27 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <title>Premium Finance Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Correct path to your CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="app-shell">
-        <header class="app-header">
-            <h1>Premium Finance Stock Analyzer</h1>
-            <nav>
+    <div class="page-wrapper">
+        <header class="top-bar">
+            <div class="brand">
+                <span class="brand-main">Premium Finance</span>
+                <span class="brand-sub">AI Stock Analyzer</span>
+            </div>
+            <nav class="top-nav">
                 <a href="{{ url_for('index') }}">Home</a>
                 <a href="{{ url_for('lookup') }}">Ticker Lookup</a>
             </nav>
         </header>
 
-        <main class="app-main">
-            {% if error %}
-              <div class="alert">{{ error }}</div>
-            {% endif %}
+        <main class="content-wrapper">
             {% block content %}{% endblock %}
         </main>
 
-        <footer class="app-footer">
-            <p>&copy; {{ 2025 }} John Pirisino – ConfigOptima / YakWithYourData</p>
+        <footer class="footer">
+            <span>© {{ 2025 }} John Pirisino • ConfigOptima / YakWithYourData</span>
         </footer>
     </div>
 </body>
