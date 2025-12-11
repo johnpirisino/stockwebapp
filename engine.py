@@ -9,6 +9,7 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
+import yfinance as yf
 
 import matplotlib
 matplotlib.use("Agg")  # headless backend for servers
@@ -16,13 +17,12 @@ import matplotlib.pyplot as plt
 
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, PageBreak,
-    Frame, PageTemplate, Image, Table, TableStyle
+    Frame, PageTemplate, Image
 )
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
-from reportlab.lib import colors
 
 # =========================================
 # Environment / config
@@ -74,126 +74,140 @@ def fd_headers() -> Dict[str, str]:
 
 def fd_get_json(path: str, params: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Any], Optional[str]]:
     """
-    Generic helper to call FinancialDatasets.ai with redirect support.
+    Generic helper to call FinancialDatasets.ai and return (json, error_str).
+    Never prints huge JSON; only status + short error snippet if DEBUG on.
     """
     if not FD_API_KEY:
         return None, "FINANCIAL_DATASETS_API_KEY missing."
 
     url = f"{FD_BASE_URL}{path}"
-
     try:
-        r = requests.get(
-            url,
-            headers=fd_headers(),
-            params=params,
-            timeout=60,             # increased timeout
-            allow_redirects=True    # THE CRITICAL FIX
-        )
-
-        dbg(f"FD GET {path} status={r.status_code} url={r.url}")
-
+        r = requests.get(url, headers=fd_headers(), params=params, timeout=20)
+        dbg(f"FD GET {path} status={r.status_code}")
         if r.status_code != 200:
             snippet = (r.text or "")[:200]
             dbg(f"FD ERROR {path}: {snippet}")
             return None, f"{r.status_code}: {snippet}"
-
-        # Some FD endpoints return empty body on redirect unless json() is attempted
-        try:
-            return r.json(), None
-        except:
-            return None, "Empty or invalid JSON response."
-
+        data = r.json()
+        return data, None
     except Exception as e:
         dbg(f"FD EXCEPTION {path}: {e}")
         return None, str(e)
 
+
+# =========================================
+# Hybrid price history: FD.ai first, fallback to yfinance
+# =========================================
+
+def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    Primary: FinancialDatasets.ai /prices
+    Fallback: yfinance
+    Returns DataFrame indexed by datetime with columns: 'close', 'volume'
+    """
+    symbol = symbol.upper()
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=days)
+
+    # --- Try FinancialDatasets.ai first ---
+    if FD_API_KEY:
+        params = {
+            "ticker": symbol,
+            "start_date": start.isoformat(),
+            "end_date": end.isoformat(),
+            "interval": "day",
+            "interval_multiplier": 1,
+        }
+        try:
+            url = f"{FD_BASE_URL}/prices/"
+            r = requests.get(
+                url,
+                headers=fd_headers(),
+                params=params,
+                timeout=20,
+                allow_redirects=True,
+            )
+            dbg(f"FD /prices status={r.status_code} url={r.url}")
+            if r.status_code == 200:
+                data = r.json()
+                prices = data.get("prices") if isinstance(data, dict) else None
+                if prices:
+                    df = pd.DataFrame(prices)
+
+                    # Time index
+                    if "time" in df.columns:
+                        df["time"] = df["time"].astype(str)
+                        df["time"] = df["time"].str.replace(" EDT", "", regex=False).str.replace(" EST", "", regex=False)
+                        df["time"] = pd.to_datetime(df["time"], errors="coerce", utc=True)
+                        df = df.dropna(subset=["time"])
+                        df = df.set_index("time")
+                    elif "date" in df.columns:
+                        df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
+                        df = df.dropna(subset=["date"])
+                        df = df.set_index("date")
+                    else:
+                        dbg("FD /prices missing time/date column; falling back to yfinance.")
+                        df = None
+
+                    if df is not None:
+                        # Normalize columns
+                        if "close" not in df.columns:
+                            if "adj_close" in df.columns:
+                                df["close"] = df["adj_close"]
+                            elif "c" in df.columns:
+                                df["close"] = df["c"]
+                        if "volume" not in df.columns:
+                            if "v" in df.columns:
+                                df["volume"] = df["v"]
+                            else:
+                                df["volume"] = 0.0
+
+                        if "close" in df.columns:
+                            df = df.sort_index()
+                            return df[["close", "volume"]], None
+                        else:
+                            dbg("FD /prices response had no usable close column; falling back to yfinance.")
+                else:
+                    dbg("FD /prices returned no 'prices' array; falling back to yfinance.")
+            else:
+                dbg(f"FD /prices non-200 ({r.status_code}); falling back to yfinance.")
+        except Exception as e:
+            dbg(f"FD /prices exception: {e}; falling back to yfinance.")
+
+    # --- Fallback: yfinance ---
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period=f"{days}d", interval="1d")
+        if hist is None or hist.empty:
+            return None, f"yfinance: no price data for {symbol}."
+        df = hist.copy()
+        # Ensure datetime index (usually already is)
+        df.index = pd.to_datetime(df.index, utc=True)
+
+        # Normalize to required columns
+        if "Close" in df.columns:
+            df.rename(columns={"Close": "close"}, inplace=True)
+        if "Volume" in df.columns:
+            df.rename(columns={"Volume": "volume"}, inplace=True)
+        if "close" not in df.columns:
+            return None, "yfinance: missing Close column."
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+
+        return df[["close", "volume"]], None
+    except Exception as e:
+        return None, f"yfinance exception: {e}"
 
 
 # =========================================
 # FinancialDatasets.ai wrappers
 # =========================================
 
-def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
-    """
-    FinancialDatasets.ai price endpoint (robust version).
-    Handles 301 redirects, adjusted prices, and symbols like FI.
-    """
-
-    end = datetime.utcnow().date()
-    start = end - timedelta(days=days)
-
-    params = {
-        "ticker": symbol.upper(),
-        "start_date": start.isoformat(),
-        "end_date": end.isoformat(),
-        "interval": "day",
-        "interval_multiplier": 1,
-        "adjusted": "true"      # ★ Required for many tickers including FI
-    }
-
-    try:
-        # NOTE: trailing slash + allow_redirects=True REQUIRED
-        r = requests.get(
-            f"{FD_BASE_URL}/prices/",
-            headers=fd_headers(),
-            params=params,
-            timeout=60,
-            allow_redirects=True
-        )
-
-        dbg(f"FD prices status={r.status_code}")
-        dbg(f"FD prices final URL={r.url}")
-
-        if r.status_code != 200:
-            return None, f"HTTP {r.status_code}: {r.text[:200]}"
-
-        data = r.json()
-
-    except Exception as e:
-        return None, f"FD exception: {e}"
-
-    # Validate JSON
-    prices = data.get("prices")
-    if not prices:
-        return None, "FD returned no 'prices' list."
-
-    df = pd.DataFrame(prices)
-
-    # Normalize date/time column
-    if "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], errors="coerce", utc=True)
-        df = df.dropna(subset=["time"]).set_index("time")
-    elif "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
-        df = df.dropna(subset=["date"]).set_index("date")
-    else:
-        return None, "Missing 'time' or 'date' fields."
-
-    # Normalize close
-    df["close"] = (
-        df.get("close") or
-        df.get("adj_close") or
-        df.get("c")
-    )
-
-    if df["close"].isna().all():
-        return None, "FD returned no close prices."
-
-    # Normalize volume
-    df["volume"] = (
-        df.get("volume") or
-        df.get("v") or
-        0
-    )
-
-    return df.sort_index(), None
-
 def fetch_financial_metrics_snapshot(symbol: str):
     if not FD_API_KEY:
-        dbg("❌ Missing FD_API_KEY")
+        dbg("❌ Missing FD_API_KEY for financial-metrics snapshot")
         return None, "Missing key"
 
-    # Correct endpoint (note trailing slash, allow redirects)
     url = f"{FD_BASE_URL}/financial-metrics/snapshot/"
     params = {"ticker": symbol.upper()}
 
@@ -203,12 +217,12 @@ def fetch_financial_metrics_snapshot(symbol: str):
             headers=fd_headers(),
             params=params,
             timeout=20,
-            allow_redirects=True,
+            allow_redirects=True
         )
 
-        dbg(f"DEBUG snapshot status: {r.status_code}")
-        dbg(f"DEBUG snapshot URL: {r.url}")
-        dbg(f"DEBUG snapshot text: {r.text[:300]}")
+        dbg(f"FD /financial-metrics/snapshot status={r.status_code} url={r.url}")
+        if DEBUG:
+            dbg(f"FD /financial-metrics/snapshot body={r.text[:400]}")
 
         if r.status_code != 200:
             return None, f"HTTP {r.status_code}: {r.text[:200]}"
@@ -218,11 +232,12 @@ def fetch_financial_metrics_snapshot(symbol: str):
         if isinstance(data, dict) and "snapshot" in data:
             return data["snapshot"], None
 
-        return data, None  # fallback
+        return data, None
 
     except Exception as e:
-        dbg(f"ERROR Snapshot: {e}")
+        dbg(f"ERROR financial-metrics snapshot: {e}")
         return None, str(e)
+
 
 def fetch_financial_metrics_history(symbol: str, period: str = "annual", limit: int = 10) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     params = {"ticker": symbol.upper(), "period": period, "limit": limit}
@@ -320,7 +335,7 @@ def fetch_financials(symbol: str) -> Tuple[Optional[Dict[str, Any]], Optional[st
 
 
 # =========================================
-# Stock snapshot built from FD only
+# Stock snapshot (FD facts + hybrid prices)
 # =========================================
 
 def build_stock_snapshot(symbol: str) -> Dict[str, Any]:
@@ -349,7 +364,7 @@ def build_stock_snapshot(symbol: str) -> Dict[str, Any]:
     else:
         dbg(f"{symbol}: company facts missing: {cf_err}")
 
-    # Price history
+    # Price history (hybrid: FD → yfinance)
     df, price_err = fetch_price_history_df(symbol, days=400)
     if df is None or df.empty:
         dbg(f"{symbol}: price history missing: {price_err}")
@@ -366,7 +381,7 @@ def build_stock_snapshot(symbol: str) -> Dict[str, Any]:
             snapshot["day_change_dollar"] = day_change
             snapshot["day_change_pct"] = (day_change / prev) * 100.0
 
-    # 52-week stats & 1Y change
+    # 52-week high/low & 1Y change from same series
     snapshot["year_low"] = float(close.min())
     snapshot["year_high"] = float(close.max())
     first_price = float(close.iloc[0])
@@ -377,17 +392,19 @@ def build_stock_snapshot(symbol: str) -> Dict[str, Any]:
 
 
 # =========================================
-# Multi-year Fundamentals Table (Option 3: minimal columns)
+# Multi-year Fundamentals Table (from FD financials)
 # =========================================
 
-def build_fundamentals_table_meta(financials: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Build table meta for MULTI-YEAR FUNDAMENTALS (Annual) with minimal columns:
-      Year, Sales, EPS, Sales YoY, EPS YoY
-    """
+def build_fundamentals_table(financials: Dict[str, Any]) -> List[str]:
+    lines: List[str] = []
+
     inc_list = financials.get("income_statements") or []
     if not inc_list:
-        return None
+        lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
+        lines.append("-" * 70)
+        lines.append("No income statement data returned.")
+        lines.append("")
+        return lines
 
     rows: List[Dict[str, Any]] = []
     for item in inc_list:
@@ -399,15 +416,26 @@ def build_fundamentals_table_meta(financials: Dict[str, Any]) -> Optional[Dict[s
         year = report_period[:4]
 
         sales = item.get("revenue")
+        gp = item.get("gross_profit")
+        op = item.get("operating_income") or item.get("ebit")
+        ni = item.get("net_income")
         eps = item.get("earnings_per_share")
+
         rows.append({
             "year": year,
             "sales": sales,
+            "gp": gp,
+            "op": op,
+            "ni": ni,
             "eps": eps,
         })
 
     if not rows:
-        return None
+        lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
+        lines.append("-" * 70)
+        lines.append("No annual income statements found.")
+        lines.append("")
+        return lines
 
     rows.sort(key=lambda r: r["year"])
 
@@ -419,11 +447,23 @@ def build_fundamentals_table_meta(financials: Dict[str, Any]) -> Optional[Dict[s
         except Exception:
             return None
 
+    def fmt_pct(value, decimals=1):
+        if value is None:
+            return "   N/A"
+        return f"{value:6.{decimals}f}%"
+
     prev_sales = None
     prev_eps = None
     for r in rows:
         s = r["sales"]
+        gp = r["gp"]
+        op = r["op"]
+        ni = r["ni"]
         eps = r["eps"]
+
+        r["gp_margin"] = pct(gp, s)
+        r["op_margin"] = pct(op, s)
+        r["ni_margin"] = pct(ni, s)
 
         if prev_sales not in (None, 0) and s not in (None, 0):
             r["sales_yoy"] = pct(s - prev_sales, prev_sales)
@@ -438,299 +478,46 @@ def build_fundamentals_table_meta(financials: Dict[str, Any]) -> Optional[Dict[s
         prev_sales = s
         prev_eps = eps
 
-    # Last 5 years only
     if len(rows) > 5:
         rows = rows[-5:]
 
-    data: List[List[str]] = []
-    data.append(["Year", "Sales", "EPS", "Sales YoY", "EPS YoY"])
+    lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
+    lines.append("-" * 70)
+    header = (
+        "Year   "
+        "Sales        GP           OpInc        NetInc       EPS    "
+        "GP%    OP%    NI%   SlsYoY  EPSYoY"
+    )
+    lines.append(header)
+    lines.append("-" * 70)
+
     for r in rows:
         year = r["year"]
-        sales = fmt_int(r["sales"])
+        s = fmt_int(r["sales"])
+        gp = fmt_int(r["gp"])
+        op = fmt_int(r["op"])
+        ni = fmt_int(r["ni"])
         eps = fmt_number(r["eps"], 2)
-        sy = f"{fmt_number(r['sales_yoy'], 1)}%" if r["sales_yoy"] is not None else "N/A"
-        ey = f"{fmt_number(r['eps_yoy'], 1)}%" if r["eps_yoy"] is not None else "N/A"
-        data.append([year, sales, eps, sy, ey])
 
-    col_widths = [0.9 * inch, 1.3 * inch, 0.9 * inch, 1.1 * inch, 1.1 * inch]
+        gp_m = fmt_pct(r["gp_margin"])
+        op_m = fmt_pct(r["op_margin"])
+        ni_m = fmt_pct(r["ni_margin"])
+        sy = fmt_pct(r["sales_yoy"])
+        ey = fmt_pct(r["eps_yoy"])
 
-    return {
-        "title": "MULTI-YEAR FUNDAMENTALS (Annual)",
-        "data": data,
-        "colWidths": col_widths,
-    }
+        line = (
+            f"{year:<6}"
+            f"{s:>12} {gp:>12} {op:>12} {ni:>12} {eps:>7}  "
+            f"{gp_m:>6} {op_m:>6} {ni_m:>6} {sy:>7} {ey:>7}"
+        )
+        lines.append(line)
 
-
-# =========================================
-# Table meta builders for other sections (single)
-# =========================================
-
-def build_metrics_table_meta_single(fm: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not fm:
-        return None
-
-    rows = [
-        ("Market Cap", "market_cap"),
-        ("Enterprise Value", "enterprise_value"),
-        ("P/E Ratio", "price_to_earnings_ratio"),
-        ("P/B Ratio", "price_to_book_ratio"),
-        ("P/S Ratio", "price_to_sales_ratio"),
-        ("EV/EBITDA", "enterprise_value_to_ebitda_ratio"),
-        ("EV/Sales", "enterprise_value_to_revenue_ratio"),
-        ("Free Cash Flow Yield", "free_cash_flow_yield"),
-        ("PEG Ratio", "peg_ratio"),
-        ("Gross Margin", "gross_margin"),
-        ("Operating Margin", "operating_margin"),
-        ("Net Margin", "net_margin"),
-        ("Return on Equity", "return_on_equity"),
-        ("Return on Assets", "return_on_assets"),
-        ("Return on Invested Cap.", "return_on_invested_capital"),
-        ("Current Ratio", "current_ratio"),
-        ("Quick Ratio", "quick_ratio"),
-        ("Cash Ratio", "cash_ratio"),
-        ("Debt to Equity", "debt_to_equity"),
-        ("Debt to Assets", "debt_to_assets"),
-        ("Interest Coverage", "interest_coverage"),
-        ("Revenue Growth", "revenue_growth"),
-        ("Earnings Growth", "earnings_growth"),
-        ("Book Value Growth", "book_value_growth"),
-        ("EPS Growth", "earnings_per_share_growth"),
-        ("Free Cash Flow Growth", "free_cash_flow_growth"),
-        ("Operating Income Growth", "operating_income_growth"),
-        ("EBITDA Growth", "ebitda_growth"),
-        ("Payout Ratio", "payout_ratio"),
-        ("Earnings Per Share", "earnings_per_share"),
-        ("Book Value Per Share", "book_value_per_share"),
-        ("Free Cash Flow Per Share", "free_cash_flow_per_share"),
-    ]
-
-    data: List[List[str]] = [["Metric", "Value"]]
-    for label, key in rows:
-        val = fm.get(key)
-        if key in ("market_cap", "enterprise_value"):
-            txt = fmt_int(val)
-        elif "growth" in key or "margin" in key or "yield" in key or "ratio" in key:
-            txt = fmt_number(val, 4)
-        else:
-            txt = fmt_number(val, 4)
-        data.append([label, txt])
-
-    col_widths = [2.6 * inch, 2.0 * inch]
-
-    return {
-        "title": "FINANCIAL METRICS SNAPSHOT (FinancialDatasets.ai)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_analyst_table_meta_single(analyst: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
-    if not analyst:
-        return None
-    data: List[List[str]] = [["Fiscal Period", "Period", "EPS Estimate"]]
-    for e in analyst:
-        fp = e.get("fiscal_period", "N/A")
-        period = e.get("period", "N/A")
-        eps = fmt_number(e.get("earnings_per_share"), 4)
-        data.append([fp, period, eps])
-
-    col_widths = [1.3 * inch, 0.9 * inch, 1.1 * inch]
-    return {
-        "title": "ANALYST ESTIMATES (Annual)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_insider_table_meta_single(insider: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
-    if not insider:
-        return None
-    data: List[List[str]] = [["Date", "Name", "Shares"]]
-    for t in insider[:5]:
-        date = t.get("transaction_date", "N/A")
-        name = t.get("name", "N/A")
-        shares = fmt_int(t.get("transaction_shares"))
-        data.append([date, name, shares])
-
-    col_widths = [1.1 * inch, 2.5 * inch, 0.9 * inch]
-    return {
-        "title": "INSIDER TRADES (Recent)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_institutional_table_meta_single(inst: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
-    if not inst:
-        return None
-    sorted_inst = sorted(inst, key=lambda x: x.get("shares") or 0, reverse=True)[:10]
-    data: List[List[str]] = [["Investor", "Shares"]]
-    for h in sorted_inst:
-        investor = h.get("investor", "N/A")
-        shares = fmt_int(h.get("shares"))
-        data.append([investor, shares])
-
-    col_widths = [3.3 * inch, 1.2 * inch]
-    return {
-        "title": "INSTITUTIONAL OWNERSHIP (Top 10)",
-        "data": data,
-        "colWidths": col_widths,
-    }
+    lines.append("")
+    return lines
 
 
 # =========================================
-# Table meta builders for compare sections
-# =========================================
-
-def build_metrics_table_meta_compare(
-    fm1: Optional[Dict[str, Any]],
-    fm2: Optional[Dict[str, Any]],
-    s1: str,
-    s2: str,
-) -> Optional[Dict[str, Any]]:
-    if not fm1 and not fm2:
-        return None
-
-    rows = [
-        ("Market Cap", "market_cap"),
-        ("Enterprise Value", "enterprise_value"),
-        ("P/E Ratio", "price_to_earnings_ratio"),
-        ("P/B Ratio", "price_to_book_ratio"),
-        ("P/S Ratio", "price_to_sales_ratio"),
-        ("EV/EBITDA", "enterprise_value_to_ebitda_ratio"),
-        ("EV/Sales", "enterprise_value_to_revenue_ratio"),
-        ("Free Cash Flow Yield", "free_cash_flow_yield"),
-        ("PEG Ratio", "peg_ratio"),
-        ("Gross Margin", "gross_margin"),
-        ("Operating Margin", "operating_margin"),
-        ("Net Margin", "net_margin"),
-        ("Return on Equity", "return_on_equity"),
-        ("Return on Assets", "return_on_assets"),
-        ("Return on Invested Cap.", "return_on_invested_capital"),
-        ("Current Ratio", "current_ratio"),
-        ("Quick Ratio", "quick_ratio"),
-        ("Cash Ratio", "cash_ratio"),
-        ("Debt to Equity", "debt_to_equity"),
-        ("Debt to Assets", "debt_to_assets"),
-        ("Interest Coverage", "interest_coverage"),
-    ]
-
-    data: List[List[str]] = [["Metric", s1, s2]]
-    for label, key in rows:
-        v1 = (fm1 or {}).get(key)
-        v2 = (fm2 or {}).get(key)
-        if key in ("market_cap", "enterprise_value"):
-            t1 = fmt_int(v1)
-            t2 = fmt_int(v2)
-        else:
-            t1 = fmt_number(v1, 4)
-            t2 = fmt_number(v2, 4)
-        data.append([label, t1, t2])
-
-    col_widths = [2.4 * inch, 1.3 * inch, 1.3 * inch]
-    return {
-        "title": "FINANCIAL METRICS SNAPSHOT (Side-by-side)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_analyst_table_meta_compare(
-    analyst1: Optional[List[Dict[str, Any]]],
-    analyst2: Optional[List[Dict[str, Any]]],
-    s1: str,
-    s2: str,
-) -> Optional[Dict[str, Any]]:
-    if not analyst1 and not analyst2:
-        return None
-    data: List[List[str]] = [["Fiscal Period", f"{s1} EPS", f"{s2} EPS"]]
-    max_rows = max(len(analyst1 or []), len(analyst2 or []))
-    for i in range(max_rows):
-        left = analyst1[i] if analyst1 and i < len(analyst1) else None
-        right = analyst2[i] if analyst2 and i < len(analyst2) else None
-        fp = (left or right or {}).get("fiscal_period", "N/A")
-        leps = fmt_number((left or {}).get("earnings_per_share"), 4) if left else "N/A"
-        reps = fmt_number((right or {}).get("earnings_per_share"), 4) if right else "N/A"
-        data.append([fp, leps, reps])
-
-    col_widths = [1.4 * inch, 1.2 * inch, 1.2 * inch]
-    return {
-        "title": "ANALYST ESTIMATES (Annual, Side-by-side)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_insider_table_meta_compare(
-    insider1: Optional[List[Dict[str, Any]]],
-    insider2: Optional[List[Dict[str, Any]]],
-    s1: str,
-    s2: str,
-) -> Optional[Dict[str, Any]]:
-    if not insider1 and not insider2:
-        return None
-    data: List[List[str]] = [["Ticker", "Date", "Name", "Shares"]]
-    for t in (insider1 or [])[:5]:
-        data.append([
-            s1,
-            t.get("transaction_date", "N/A"),
-            t.get("name", "N/A"),
-            fmt_int(t.get("transaction_shares")),
-        ])
-    for t in (insider2 or [])[:5]:
-        data.append([
-            s2,
-            t.get("transaction_date", "N/A"),
-            t.get("name", "N/A"),
-            fmt_int(t.get("transaction_shares")),
-        ])
-
-    col_widths = [0.9 * inch, 1.0 * inch, 2.1 * inch, 0.9 * inch]
-    return {
-        "title": "INSIDER TRADES (Recent, Both Tickers)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-def build_institutional_table_meta_compare(
-    inst1: Optional[List[Dict[str, Any]]],
-    inst2: Optional[List[Dict[str, Any]]],
-    s1: str,
-    s2: str,
-) -> Optional[Dict[str, Any]]:
-    if not inst1 and not inst2:
-        return None
-    data: List[List[str]] = [["Ticker", "Investor", "Shares"]]
-
-    def top(inst):
-        if not inst:
-            return []
-        return sorted(inst, key=lambda x: x.get("shares") or 0, reverse=True)[:5]
-
-    for h in top(inst1):
-        data.append([
-            s1,
-            h.get("investor", "N/A"),
-            fmt_int(h.get("shares")),
-        ])
-    for h in top(inst2):
-        data.append([
-            s2,
-            h.get("investor", "N/A"),
-            fmt_int(h.get("shares")),
-        ])
-
-    col_widths = [0.9 * inch, 2.6 * inch, 0.9 * inch]
-    return {
-        "title": "INSTITUTIONAL OWNERSHIP (Top Holders)",
-        "data": data,
-        "colWidths": col_widths,
-    }
-
-
-# =========================================
-# OpenAI – AI Fundamental + AI Freelancing
+# OpenAI – AI Fundamental + AI Freelancing (single & pair)
 # =========================================
 
 def build_ai_single_prompt(symbol, snapshot, fm_snapshot, analyst_estimates, company_facts):
@@ -797,7 +584,7 @@ def generate_ai_freelancing_single(symbol: str):
     client = OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
         f"Tell me all I should know about {symbol}. "
-        "Include business model, strategy, valuation, competition, risks, catalysts, what a bull would say, what a bear would say"
+        "Include business model, strategy, valuation, competition, risks, catalysts, "
         "and long-term outlook. No ### or **."
     )
     try:
@@ -886,7 +673,7 @@ Data:
 
 
 # =========================================
-# Chart builders
+# Chart builders (hybrid prices → pandas → matplotlib)
 # =========================================
 
 def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]]) -> Optional[str]:
@@ -898,20 +685,17 @@ def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]])
     close = df["close"].astype(float)
     volume = df["volume"].astype(float)
 
-    # Moving averages
     hist = pd.DataFrame({"Close": close, "Volume": volume})
     hist["MA20"] = hist["Close"].rolling(window=20).mean()
     hist["MA50"] = hist["Close"].rolling(window=50).mean()
     hist["MA200"] = hist["Close"].rolling(window=200).mean()
 
-    # RSI
     delta = hist["Close"].diff()
     gain = delta.clip(lower=0).rolling(window=14).mean()
     loss = -delta.clip(upper=0).rolling(window=14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
 
-    # MACD
     ema12 = hist["Close"].ewm(span=12, adjust=False).mean()
     ema26 = hist["Close"].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
@@ -922,7 +706,6 @@ def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]])
 
     dates = hist.index
 
-    # Price + MAs
     ax_price = axs[0]
     ax_price.plot(dates, hist["Close"], label="Close")
     ax_price.plot(dates, hist["MA20"], label="MA20", linewidth=0.8)
@@ -931,13 +714,11 @@ def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]])
     ax_price.set_title(f"{symbol} Price + Moving Averages")
     ax_price.legend(loc="upper left", fontsize=7)
 
-    # Volume
     ax_vol = axs[1]
     ax_vol.bar(dates, hist["Volume"] / 1_000_000.0, width=1.0)
     ax_vol.set_title("Daily Volume (M)")
     ax_vol.set_ylabel("Shares (M)")
 
-    # RSI
     ax_rsi = axs[2]
     ax_rsi.plot(dates, rsi)
     ax_rsi.axhline(70, color="red", linestyle="--", linewidth=0.8)
@@ -945,7 +726,6 @@ def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]])
     ax_rsi.set_title("RSI (14)")
     ax_rsi.set_ylim(0, 100)
 
-    # MACD
     ax_macd = axs[3]
     ax_macd.plot(dates, macd, label="MACD")
     ax_macd.plot(dates, signal, label="Signal", linestyle="--")
@@ -953,7 +733,6 @@ def build_single_charts(symbol: str, fm_history: Optional[List[Dict[str, Any]]])
     ax_macd.legend(fontsize=7)
     ax_macd.set_title("MACD (12/26/9)")
 
-    # Valuation history from FM history
     ax_val = axs[4]
     if fm_history:
         records = []
@@ -1010,14 +789,12 @@ def build_compare_charts(s1: str, s2: str) -> Optional[str]:
     fig, axs = plt.subplots(3, 1, figsize=(8.5, 11), sharex=False)
     fig.subplots_adjust(hspace=0.35)
 
-    # Price history
     ax1 = axs[0]
     ax1.plot(close1.index, close1, label=f"{s1} Close")
     ax1.plot(close2.index, close2, label=f"{s2} Close")
     ax1.set_title("Price History (1Y)")
     ax1.legend(fontsize=8)
 
-    # Indexed performance
     ax2 = axs[1]
     base1 = close1.iloc[0]
     base2 = close2.iloc[0]
@@ -1028,7 +805,6 @@ def build_compare_charts(s1: str, s2: str) -> Optional[str]:
     ax2.set_title("Indexed Performance (Start = 100)")
     ax2.legend(fontsize=8)
 
-    # P/E history from financial-metrics
     fm_hist1, _ = fetch_financial_metrics_history(s1, "annual", 10)
     fm_hist2, _ = fetch_financial_metrics_history(s2, "annual", 10)
 
@@ -1075,7 +851,7 @@ def build_compare_charts(s1: str, s2: str) -> Optional[str]:
 
 
 # =========================================
-# PDF export (with table injection)
+# PDF export (shared)
 # =========================================
 
 def is_real_section_header(text: str) -> bool:
@@ -1094,15 +870,8 @@ def is_real_section_header(text: str) -> bool:
     return alpha.isupper()
 
 
-def export_pdf(
-    text: str,
-    title_line: str,
-    chart_path: Optional[str],
-    output_path: str,
-    tables: Optional[Dict[str, Dict[str, Any]]] = None,
-):
+def export_pdf(text: str, title_line: str, chart_path: Optional[str], output_path: str):
     PAGE_WIDTH, PAGE_HEIGHT = letter
-    tables = tables or {}
 
     def header(canvas, doc):
         if canvas.getPageNumber() == 1:
@@ -1169,7 +938,6 @@ def export_pdf(
 
     story = []
 
-    # Title page
     story.append(Spacer(1, 2 * inch))
     story.append(Paragraph("John Pirisino's Stock Analyzer", title_style))
     story.append(Paragraph(title_line, descriptor_style))
@@ -1180,44 +948,6 @@ def export_pdf(
 
     for line in text.split("\n"):
         stripped = line.strip()
-
-        # Handle table tokens like [[TABLE:FUNDAMENTALS]]
-        if stripped.startswith("[[TABLE:") and stripped.endswith("]]"):
-            key = stripped[8:-2]  # between [[TABLE: and ]]
-            meta = tables.get(key)
-            if meta:
-                title = meta.get("title")
-                if title:
-                    story.append(Paragraph(title, header_style))
-                    story.append(Spacer(1, 6))
-
-                data = meta.get("data") or []
-                col_widths = meta.get("colWidths")
-
-                if not data:
-                    story.append(Paragraph("No data available.", body_style))
-                    story.append(Spacer(1, 12))
-                else:
-                    tbl = Table(data, colWidths=col_widths)
-                    tbl_style = TableStyle([
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                        ("BOX", (0, 0), (-1, -1), 0.75, colors.black),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#222222")),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
-                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-                        ("TOPPADDING", (0, 0), (-1, 0), 6),
-                    ])
-                    tbl.setStyle(tbl_style)
-                    story.append(tbl)
-                    story.append(Spacer(1, 12))
-            continue
-
         if stripped == "":
             story.append(Spacer(1, 10))
             continue
@@ -1270,9 +1000,7 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     inst, inst_err = fetch_institutional(symbol)
 
     lines: List[str] = []
-    tables: Dict[str, Dict[str, Any]] = {}
 
-    # Snapshot
     lines.append("=" * 72)
     lines.append(f"STOCK SNAPSHOT: {symbol}")
     lines.append("=" * 72)
@@ -1292,7 +1020,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     lines.append(f"1Y Change (%)      : {fmt_number(snapshot['change_1y_pct'])}%")
     lines.append("")
 
-    # AI Fundamental
     lines.append("=" * 72)
     lines.append("AI FUNDAMENTAL SUMMARY")
     lines.append("=" * 72)
@@ -1302,7 +1029,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     )
     lines.append("")
 
-    # AI Freelancing
     lines.append("=" * 72)
     lines.append("AI FREELANCING SUMMARY")
     lines.append("=" * 72)
@@ -1310,7 +1036,6 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
     lines.append(generate_ai_freelancing_single(symbol))
     lines.append("")
 
-    # Company facts
     lines.append("COMPANY FACTS")
     lines.append("-" * 72)
     if facts:
@@ -1322,78 +1047,100 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append("No company facts available." + (f" ({facts_err})" if facts_err else ""))
     lines.append("")
 
-    # Multi-year fundamentals (as grid)
     if financials:
-        fund_meta = build_fundamentals_table_meta(financials)
-        if fund_meta:
-            tables["FUNDAMENTALS"] = fund_meta
-            lines.append("[[TABLE:FUNDAMENTALS]]")
-            lines.append("")
-        else:
-            lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
-            lines.append("-" * 70)
-            lines.append("No financials available for multi-year view.")
-            lines.append("")
+        lines.extend(build_fundamentals_table(financials))
     else:
         lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
         lines.append("-" * 70)
         lines.append("No financials available for multi-year view." + (f" ({fin_err})" if fin_err else ""))
         lines.append("")
 
-    # Financial metrics snapshot (grid)
-    metrics_meta = build_metrics_table_meta_single(fm_snapshot)
     lines.append("FINANCIAL METRICS SNAPSHOT (FinancialDatasets.ai)")
     lines.append("-" * 72)
-    if metrics_meta:
-        tables["FM_SNAPSHOT"] = metrics_meta
-        lines.append("[[TABLE:FM_SNAPSHOT]]")
+    if fm_snapshot:
+        fm = fm_snapshot
+        lines.append(f"Market Cap              : {fmt_int(fm.get('market_cap'))}")
+        lines.append(f"Enterprise Value        : {fmt_int(fm.get('enterprise_value'))}")
+        lines.append(f"P/E Ratio               : {fmt_number(fm.get('price_to_earnings_ratio'),4)}")
+        lines.append(f"P/B Ratio               : {fmt_number(fm.get('price_to_book_ratio'),4)}")
+        lines.append(f"P/S Ratio               : {fmt_number(fm.get('price_to_sales_ratio'),4)}")
+        lines.append(f"EV/EBITDA               : {fmt_number(fm.get('enterprise_value_to_ebitda_ratio'),4)}")
+        lines.append(f"EV/Sales                : {fmt_number(fm.get('enterprise_value_to_revenue_ratio'),4)}")
+        lines.append(f"Free Cash Flow Yield    : {fmt_number(fm.get('free_cash_flow_yield'),4)}")
+        lines.append(f"PEG Ratio               : {fmt_number(fm.get('peg_ratio'),4)}")
+        lines.append(f"Gross Margin            : {fmt_number(fm.get('gross_margin'),4)}")
+        lines.append(f"Operating Margin        : {fmt_number(fm.get('operating_margin'),4)}")
+        lines.append(f"Net Margin              : {fmt_number(fm.get('net_margin'),4)}")
+        lines.append(f"Return on Equity        : {fmt_number(fm.get('return_on_equity'),4)}")
+        lines.append(f"Return on Assets        : {fmt_number(fm.get('return_on_assets'),4)}")
+        lines.append(f"Return on Invested Cap. : {fmt_number(fm.get('return_on_invested_capital'),4)}")
+        lines.append(f"Current Ratio           : {fmt_number(fm.get('current_ratio'),4)}")
+        lines.append(f"Quick Ratio             : {fmt_number(fm.get('quick_ratio'),4)}")
+        lines.append(f"Cash Ratio              : {fmt_number(fm.get('cash_ratio'),4)}")
+        lines.append(f"Debt to Equity          : {fmt_number(fm.get('debt_to_equity'),4)}")
+        lines.append(f"Debt to Assets          : {fmt_number(fm.get('debt_to_assets'),4)}")
+        lines.append(f"Interest Coverage       : {fmt_number(fm.get('interest_coverage'),4)}")
+        lines.append(f"Revenue Growth          : {fmt_number(fm.get('revenue_growth'),4)}")
+        lines.append(f"Earnings Growth         : {fmt_number(fm.get('earnings_growth'),4)}")
+        lines.append(f"Book Value Growth       : {fmt_number(fm.get('book_value_growth'),4)}")
+        lines.append(f"EPS Growth              : {fmt_number(fm.get('earnings_per_share_growth'),4)}")
+        lines.append(f"Free Cash Flow Growth   : {fmt_number(fm.get('free_cash_flow_growth'),4)}")
+        lines.append(f"Operating Income Growth : {fmt_number(fm.get('operating_income_growth'),4)}")
+        lines.append(f"EBITDA Growth           : {fmt_number(fm.get('ebitda_growth'),4)}")
+        lines.append(f"Payout Ratio            : {fmt_number(fm.get('payout_ratio'),4)}")
+        lines.append(f"Earnings Per Share      : {fmt_number(fm.get('earnings_per_share'),4)}")
+        lines.append(f"Book Value Per Share    : {fmt_number(fm.get('book_value_per_share'),4)}")
+        lines.append(f"Free Cash Flow Per Share: {fmt_number(fm.get('free_cash_flow_per_share'),4)}")
     else:
         lines.append("No snapshot metrics." + (f" ({fm_err})" if fm_err else ""))
     lines.append("")
 
-    # Analyst estimates (grid)
-    analyst_meta = build_analyst_table_meta_single(analyst)
-    if analyst_meta:
-        tables["ANALYST_SINGLE"] = analyst_meta
-        lines.append("[[TABLE:ANALYST_SINGLE]]")
+    lines.append("ANALYST ESTIMATES (Annual)")
+    lines.append("-" * 72)
+    if analyst:
+        for e in analyst:
+            lines.append(f"Fiscal Period : {e.get('fiscal_period','N/A')}")
+            lines.append(f"Period        : {e.get('period','N/A')}")
+            lines.append(f"EPS Estimate  : {fmt_number(e.get('earnings_per_share'),4)}")
+            lines.append("")
     else:
-        lines.append("ANALYST ESTIMATES (Annual)")
-        lines.append("-" * 72)
         msg = "No analyst estimates."
         if analyst_err:
             msg += f" ({analyst_err})"
         lines.append(msg)
     lines.append("")
 
-    # Insider trades (grid)
-    insider_meta = build_insider_table_meta_single(insider)
-    if insider_meta:
-        tables["INSIDER_SINGLE"] = insider_meta
-        lines.append("[[TABLE:INSIDER_SINGLE]]")
+    lines.append("INSIDER TRADES (Recent)")
+    lines.append("-" * 72)
+    if insider:
+        for t in insider[:5]:
+            lines.append(
+                f"{t.get('transaction_date','N/A')} | "
+                f"{t.get('name','N/A')} | "
+                f"Shares: {fmt_int(t.get('transaction_shares'))}"
+            )
     else:
-        lines.append("INSIDER TRADES (Recent)")
-        lines.append("-" * 72)
         msg = "No insider trades."
         if insider_err:
             msg += f" ({insider_err})"
         lines.append(msg)
     lines.append("")
 
-    # Institutional (grid)
-    inst_meta = build_institutional_table_meta_single(inst)
-    if inst_meta:
-        tables["INST_SINGLE"] = inst_meta
-        lines.append("[[TABLE:INST_SINGLE]]")
+    lines.append("INSTITUTIONAL OWNERSHIP (Top 10)")
+    lines.append("-" * 72)
+    if inst:
+        sorted_inst = sorted(inst, key=lambda x: x.get("shares") or 0, reverse=True)[:10]
+        for h in sorted_inst:
+            lines.append(
+                f"{h.get('investor','N/A')[:40]:40} {fmt_int(h.get('shares')):>12}"
+            )
     else:
-        lines.append("INSTITUTIONAL OWNERSHIP (Top 10)")
-        lines.append("-" * 72)
         msg = "No institutional ownership data."
         if inst_err:
             msg += f" ({inst_err})"
         lines.append(msg)
     lines.append("")
 
-    # News (text)
     lines.append("LATEST NEWS")
     lines.append("-" * 72)
     if news:
@@ -1408,14 +1155,12 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> str:
         lines.append(msg)
     lines.append("")
 
-    # Charts
     chart_path = build_single_charts(symbol, fm_history)
 
-    # Output path
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
     title_line = f"{symbol} – {snapshot['long_name']}"
-    export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
+    export_pdf("\n".join(lines), title_line, chart_path, out_file)
     return out_file
 
 
@@ -1446,57 +1191,44 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     insider2, insider2_err = fetch_insider_trades(s2)
 
     lines: List[str] = []
-    tables: Dict[str, Dict[str, Any]] = {}
 
-    # Header
+    def s2_num_line(label: str, v1, v2, decimals=2):
+        left = f"{label:<18}{fmt_number(v1, decimals):>12}"
+        right = f"{label:<18}{fmt_number(v2, decimals):>12}"
+        lines.append(f"{left}    {right}")
+
+    def s2_text_line(label: str, t1: str, t2: str):
+        left = f"{label:<12}{(t1 or '')[:28]:<28}"
+        right = f"{label:<12}{(t2 or '')[:28]:<28}"
+        lines.append(f"{left}    {right}")
+
     lines.append("=" * 72)
     lines.append(f"COMPARISON: {s1} vs {s2}")
     lines.append("=" * 72)
     lines.append("")
 
-    # Basic info
     lines.append("BASIC INFO")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
     lines.append("")
-    lines.append(f"Name     : {d1['long_name']:<30} {d2['long_name']}")
-    lines.append(f"Sector   : {d1['sector']:<30} {d2['sector']}")
-    lines.append(f"Industry : {d1['industry']:<30} {d2['industry']}")
-    lines.append(f"Website  : {d1['website']:<30} {d2['website']}")
+    s2_text_line("Name", d1["long_name"], d2["long_name"])
+    s2_text_line("Sector", d1["sector"], d2["sector"])
+    s2_text_line("Industry", d1["industry"], d2["industry"])
+    s2_text_line("Website", d1["website"], d2["website"])
     lines.append("")
 
-    # Price & performance
     lines.append("PRICE & PERFORMANCE")
     lines.append("-" * 72)
     lines.append(f"{s1:<40}{s2:<40}")
     lines.append("")
-    lines.append(
-        f"Current Price   : {fmt_number(d1['current_price']):>10}        "
-        f"Current Price   : {fmt_number(d2['current_price']):>10}"
-    )
-    lines.append(
-        f"Day Change (%)  : {fmt_number(d1['day_change_pct']):>10}%       "
-        f"Day Change (%)  : {fmt_number(d2['day_change_pct']):>10}%"
-    )
-    lines.append(
-        f"Day Change ($)  : {fmt_number(d1['day_change_dollar']):>10}      "
-        f"Day Change ($)  : {fmt_number(d2['day_change_dollar']):>10}"
-    )
-    lines.append(
-        f"52W Low         : {fmt_number(d1['year_low']):>10}      "
-        f"52W Low         : {fmt_number(d2['year_low']):>10}"
-    )
-    lines.append(
-        f"52W High        : {fmt_number(d1['year_high']):>10}      "
-        f"52W High        : {fmt_number(d2['year_high']):>10}"
-    )
-    lines.append(
-        f"1Y Change (%)   : {fmt_number(d1['change_1y_pct']):>10}%       "
-        f"1Y Change (%)   : {fmt_number(d2['change_1y_pct']):>10}%"
-    )
+    s2_num_line("Current Price", d1["current_price"], d2["current_price"])
+    s2_num_line("Day Change (%)", d1["day_change_pct"], d2["day_change_pct"])
+    s2_num_line("Day Change ($)", d1["day_change_dollar"], d2["day_change_dollar"])
+    s2_num_line("52W Low", d1["year_low"], d2["year_low"])
+    s2_num_line("52W High", d1["year_high"], d2["year_high"])
+    s2_num_line("1Y Change (%)", d1["change_1y_pct"], d2["change_1y_pct"])
     lines.append("")
 
-    # AI fundamentals + freelancing combined
     lines.append("=" * 72)
     lines.append("AI FUNDAMENTAL & FREELANCING COMPARISON SUMMARY")
     lines.append("=" * 72)
@@ -1509,63 +1241,106 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     )
     lines.append("")
 
-    # Metrics snapshot (grid)
-    metrics_cmp_meta = build_metrics_table_meta_compare(fm1, fm2, s1, s2)
-    if metrics_cmp_meta:
-        tables["FM_SNAPSHOT_CMP"] = metrics_cmp_meta
-        lines.append("[[TABLE:FM_SNAPSHOT_CMP]]")
+    lines.append("FINANCIAL METRICS SNAPSHOT")
+    lines.append("-" * 72)
+    lines.append(f"{s1:<40}{s2:<40}")
+    lines.append("")
+    if fm1 and fm2:
+        s2_num_line("Market Cap", (fm1 or {}).get("market_cap"), (fm2 or {}).get("market_cap"), 0)
+        s2_num_line("Enterprise Val", (fm1 or {}).get("enterprise_value"), (fm2 or {}).get("enterprise_value"), 0)
+        s2_num_line("P/E Ratio", (fm1 or {}).get("price_to_earnings_ratio"), (fm2 or {}).get("price_to_earnings_ratio"))
+        s2_num_line("P/B Ratio", (fm1 or {}).get("price_to_book_ratio"), (fm2 or {}).get("price_to_book_ratio"))
+        s2_num_line("P/S Ratio", (fm1 or {}).get("price_to_sales_ratio"), (fm2 or {}).get("price_to_sales_ratio"))
+        s2_num_line("EV/EBITDA", (fm1 or {}).get("enterprise_value_to_ebitda_ratio"),
+                    (fm2 or {}).get("enterprise_value_to_ebitda_ratio"))
+        s2_num_line("EV/Sales", (fm1 or {}).get("enterprise_value_to_revenue_ratio"),
+                    (fm2 or {}).get("enterprise_value_to_revenue_ratio"))
+        s2_num_line("Gross Margin", (fm1 or {}).get("gross_margin"), (fm2 or {}).get("gross_margin"))
+        s2_num_line("Op Margin", (fm1 or {}).get("operating_margin"), (fm2 or {}).get("operating_margin"))
+        s2_num_line("Net Margin", (fm1 or {}).get("net_margin"), (fm2 or {}).get("net_margin"))
     else:
-        lines.append("FINANCIAL METRICS SNAPSHOT")
-        lines.append("-" * 72)
         msg = "Metrics missing for one or both tickers."
         if fm1_err or fm2_err:
             msg += f" ({fm1_err or ''} {fm2_err or ''})"
         lines.append(msg)
     lines.append("")
 
-    # Analyst estimates (grid)
-    analyst_cmp_meta = build_analyst_table_meta_compare(analyst1, analyst2, s1, s2)
-    if analyst_cmp_meta:
-        tables["ANALYST_CMP"] = analyst_cmp_meta
-        lines.append("[[TABLE:ANALYST_CMP]]")
-    else:
-        lines.append("ANALYST ESTIMATES (Annual)")
-        lines.append("-" * 72)
+    lines.append("ANALYST ESTIMATES (Annual)")
+    lines.append("-" * 72)
+    lines.append(f"{s1:<40}{s2:<40}")
+    lines.append("")
+    max_rows = max(len(analyst1 or []), len(analyst2 or []))
+    if max_rows == 0:
         msg = "No analyst estimates for either ticker."
         if analyst1_err or analyst2_err:
             msg += f" ({analyst1_err or ''} {analyst2_err or ''})"
         lines.append(msg)
+    else:
+        for i in range(max_rows):
+            left = analyst1[i] if analyst1 and i < len(analyst1) else None
+            right = analyst2[i] if analyst2 and i < len(analyst2) else None
+            lp = left.get("fiscal_period") if left else "N/A"
+            rp = right.get("fiscal_period") if right else "N/A"
+            leps = left.get("earnings_per_share") if left else None
+            reps = right.get("earnings_per_share") if right else None
+            s2_text_line("Year", lp, rp)
+            s2_num_line("EPS Est", leps, reps, 4)
+            lines.append("")
     lines.append("")
 
-    # Institutional (grid)
-    inst_cmp_meta = build_institutional_table_meta_compare(inst1, inst2, s1, s2)
-    if inst_cmp_meta:
-        tables["INST_CMP"] = inst_cmp_meta
-        lines.append("[[TABLE:INST_CMP]]")
-    else:
-        lines.append("INSTITUTIONAL OWNERSHIP (Top Holders)")
-        lines.append("-" * 72)
+    lines.append("INSTITUTIONAL OWNERSHIP (Top 5 by Shares)")
+    lines.append("-" * 72)
+    lines.append(f"{s1:<40}{s2:<40}")
+    lines.append("")
+    top1: List[Dict[str, Any]] = []
+    top2: List[Dict[str, Any]] = []
+    if inst1:
+        top1 = sorted(inst1, key=lambda x: x.get("shares") or 0, reverse=True)[:5]
+    if inst2:
+        top2 = sorted(inst2, key=lambda x: x.get("shares") or 0, reverse=True)[:5]
+
+    max_len = max(len(top1), len(top2))
+    if max_len == 0:
         msg = "No institutional ownership data."
         if inst1_err or inst2_err:
             msg += f" ({inst1_err or ''} {inst2_err or ''})"
         lines.append(msg)
+    else:
+        for i in range(max_len):
+            left = top1[i] if i < len(top1) else None
+            right = top2[i] if i < len(top2) else None
+            lname = (left or {}).get("investor", "N/A")
+            rname = (right or {}).get("investor", "N/A")
+            lsh = (left or {}).get("shares")
+            rsh = (right or {}).get("shares")
+            left_txt = f"{lname[:30]:30} {fmt_int(lsh):>10}"
+            right_txt = f"{rname[:30]:30} {fmt_int(rsh):>10}"
+            lines.append(f"{left_txt}    {right_txt}")
     lines.append("")
 
-    # Insider trades (grid)
-    insider_cmp_meta = build_insider_table_meta_compare(insider1, insider2, s1, s2)
-    if insider_cmp_meta:
-        tables["INSIDER_CMP"] = insider_cmp_meta
-        lines.append("[[TABLE:INSIDER_CMP]]")
-    else:
-        lines.append("INSIDER TRADES (Recent)")
-        lines.append("-" * 72)
+    lines.append("INSIDER TRADES (Recent)")
+    lines.append("-" * 72)
+    lines.append(f"{s1:<40}{s2:<40}")
+    lines.append("")
+    max_len = max(len(insider1), len(insider2))
+    if max_len == 0:
         msg = "No insider trades for either ticker."
         if insider1_err or insider2_err:
             msg += f" ({insider1_err or ''} {insider2_err or ''})"
         lines.append(msg)
+    else:
+        for i in range(min(max_len, 5)):
+            left = insider1[i] if i < len(insider1) else None
+            right = insider2[i] if i < len(insider2) else None
+            ltxt = "N/A"
+            rtxt = "N/A"
+            if left:
+                ltxt = f"{left.get('transaction_date','N/A')} {left.get('name','N/A')[:20]:20} Sh:{fmt_int(left.get('transaction_shares'))}"
+            if right:
+                rtxt = f"{right.get('transaction_date','N/A')} {right.get('name','N/A')[:20]:20} Sh:{fmt_int(right.get('transaction_shares'))}"
+            lines.append(f"{ltxt:<40}    {rtxt:<40}")
     lines.append("")
 
-    # News (text)
     lines.append("LATEST NEWS")
     lines.append("-" * 72)
     lines.append(f"{s1:<60}{s2:<60}")
@@ -1604,11 +1379,5 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(out_dir, f"{s1}_{s2}_{ts}.pdf")
     title_line = f"{s1} vs {s2}"
-    export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
+    export_pdf("\n".join(lines), title_line, chart_path, out_file)
     return out_file
-
-
-
-
-
-
