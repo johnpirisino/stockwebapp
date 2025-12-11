@@ -173,7 +173,41 @@ def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.Da
 
     return df.sort_index(), None
 
+def fetch_financial_metrics_snapshot(symbol: str):
+    if not FD_API_KEY:
+        dbg("❌ Missing FD_API_KEY")
+        return None, "Missing key"
 
+    # Correct endpoint (note trailing slash, allow redirects)
+    url = f"{FD_BASE_URL}/financial-metrics/snapshot/"
+    params = {"ticker": symbol.upper()}
+
+    try:
+        r = requests.get(
+            url,
+            headers=fd_headers(),
+            params=params,
+            timeout=20,
+            allow_redirects=True,
+        )
+
+        dbg(f"DEBUG snapshot status: {r.status_code}")
+        dbg(f"DEBUG snapshot URL: {r.url}")
+        dbg(f"DEBUG snapshot text: {r.text[:300]}")
+
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {r.text[:200]}"
+
+        data = r.json()
+
+        if isinstance(data, dict) and "snapshot" in data:
+            return data["snapshot"], None
+
+        return data, None  # fallback
+
+    except Exception as e:
+        dbg(f"ERROR Snapshot: {e}")
+        return None, str(e)
 
 def fetch_financial_metrics_history(symbol: str, period: str = "annual", limit: int = 10) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
     params = {"ticker": symbol.upper(), "period": period, "limit": limit}
@@ -1557,6 +1591,7 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
     return out_file
+
 
 
 
