@@ -74,24 +74,39 @@ def fd_headers() -> Dict[str, str]:
 
 def fd_get_json(path: str, params: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Any], Optional[str]]:
     """
-    Generic helper to call FinancialDatasets.ai and return (json, error_str).
+    Generic helper to call FinancialDatasets.ai with redirect support.
     """
     if not FD_API_KEY:
         return None, "FINANCIAL_DATASETS_API_KEY missing."
 
     url = f"{FD_BASE_URL}{path}"
+
     try:
-        r = requests.get(url, headers=fd_headers(), params=params, timeout=20)
-        dbg(f"FD GET {path} status={r.status_code}")
+        r = requests.get(
+            url,
+            headers=fd_headers(),
+            params=params,
+            timeout=60,             # increased timeout
+            allow_redirects=True    # THE CRITICAL FIX
+        )
+
+        dbg(f"FD GET {path} status={r.status_code} url={r.url}")
+
         if r.status_code != 200:
             snippet = (r.text or "")[:200]
             dbg(f"FD ERROR {path}: {snippet}")
             return None, f"{r.status_code}: {snippet}"
-        data = r.json()
-        return data, None
+
+        # Some FD endpoints return empty body on redirect unless json() is attempted
+        try:
+            return r.json(), None
+        except:
+            return None, "Empty or invalid JSON response."
+
     except Exception as e:
         dbg(f"FD EXCEPTION {path}: {e}")
         return None, str(e)
+
 
 
 # =========================================
@@ -1591,6 +1606,7 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
     return out_file
+
 
 
 
