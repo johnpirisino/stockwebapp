@@ -100,62 +100,78 @@ def fd_get_json(path: str, params: Optional[Dict[str, Any]] = None) -> Tuple[Opt
 
 def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
-    Use FD /prices to get daily OHLCV, return as DataFrame indexed by datetime.
+    FinancialDatasets.ai price endpoint (robust version).
+    Handles 301 redirects, adjusted prices, and symbols like FI.
     """
+
     end = datetime.utcnow().date()
     start = end - timedelta(days=days)
+
     params = {
         "ticker": symbol.upper(),
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "interval": "day",
         "interval_multiplier": 1,
+        "adjusted": "true"      # ★ Required for many tickers including FI
     }
-    data, err = fd_get_json("/prices", params)
-    if err or not data:
-        return None, err or "Empty price response."
 
-    prices = data.get("prices") if isinstance(data, dict) else None
+    try:
+        # NOTE: trailing slash + allow_redirects=True REQUIRED
+        r = requests.get(
+            f"{FD_BASE_URL}/prices/",
+            headers=fd_headers(),
+            params=params,
+            timeout=20,
+            allow_redirects=True
+        )
+
+        dbg(f"FD prices status={r.status_code}")
+        dbg(f"FD prices final URL={r.url}")
+
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {r.text[:200]}"
+
+        data = r.json()
+
+    except Exception as e:
+        return None, f"FD exception: {e}"
+
+    # Validate JSON
+    prices = data.get("prices")
     if not prices:
-        return None, "No 'prices' field in price response."
+        return None, "FD returned no 'prices' list."
 
     df = pd.DataFrame(prices)
 
-    # Time column: "time" preferred, fall back to "date"
+    # Normalize date/time column
     if "time" in df.columns:
-        df["time"] = df["time"].astype(str)
-        df["time"] = (
-            df["time"]
-            .str.replace(" EDT", "", regex=False)
-            .str.replace(" EST", "", regex=False)
-        )
         df["time"] = pd.to_datetime(df["time"], errors="coerce", utc=True)
-        df = df.dropna(subset=["time"])
-        df = df.set_index("time")
+        df = df.dropna(subset=["time"]).set_index("time")
     elif "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True)
-        df = df.dropna(subset=["date"])
-        df = df.set_index("date")
+        df = df.dropna(subset=["date"]).set_index("date")
     else:
-        return None, "Price response missing 'time'/'date' field."
+        return None, "Missing 'time' or 'date' fields."
 
-    # Close & volume columns: handle multiple possible names
-    if "close" not in df.columns:
-        if "adj_close" in df.columns:
-            df["close"] = df["adj_close"]
-        elif "c" in df.columns:
-            df["close"] = df["c"]
-        else:
-            return None, "Price response missing 'close' column."
+    # Normalize close
+    df["close"] = (
+        df.get("close") or
+        df.get("adj_close") or
+        df.get("c")
+    )
 
-    if "volume" not in df.columns:
-        if "v" in df.columns:
-            df["volume"] = df["v"]
-        else:
-            df["volume"] = 0.0
+    if df["close"].isna().all():
+        return None, "FD returned no close prices."
 
-    df = df.sort_index()
-    return df, None
+    # Normalize volume
+    df["volume"] = (
+        df.get("volume") or
+        df.get("v") or
+        0
+    )
+
+    return df.sort_index(), None
 
 
 def fetch_financial_metrics_snapshot(symbol: str):
@@ -1577,4 +1593,5 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
     return out_file
+
 
