@@ -768,7 +768,7 @@ def generate_ai_freelancing_single(symbol: str):
     client = OpenAI(api_key=OPENAI_API_KEY)
     prompt = (
         f"Tell me all I should know about {symbol}. "
-        "Include business model, strategy, valuation, competition, risks, catalysts, "
+        "Include business model, strategy, valuation, competition, risks, catalysts, what a bull would say, what a bear would say"
         "and long-term outlook. No ### or **."
     )
     try:
@@ -1577,3 +1577,4 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
     return out_file
+
