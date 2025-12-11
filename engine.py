@@ -122,7 +122,7 @@ def fetch_price_history_df(symbol: str, days: int = 365) -> Tuple[Optional[pd.Da
             f"{FD_BASE_URL}/prices/",
             headers=fd_headers(),
             params=params,
-            timeout=20,
+            timeout=60,
             allow_redirects=True
         )
 
@@ -1593,5 +1593,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     title_line = f"{s1} vs {s2}"
     export_pdf("\n".join(lines), title_line, chart_path, out_file, tables)
     return out_file
+
 
 
