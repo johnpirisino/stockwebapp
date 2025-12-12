@@ -236,8 +236,106 @@ DATA:
         return f"AI ERROR: {e}"
 
 # =========================================================
+# PUBLIC ENTRY POINTS (REQUIRED BY APP)
+# =========================================================
+
+def run_single_to_pdf(symbol: str, out_dir: str) -> str:
+    """
+    REQUIRED ENTRY POINT
+    Called by Flask / FastAPI / Railway app
+    """
+    from datetime import datetime
+    import os
+
+    symbol = symbol.upper()
+    os.makedirs(out_dir, exist_ok=True)
+
+    snapshot = build_stock_snapshot(symbol)
+    fm_snapshot, _ = fetch_financial_metrics_snapshot(symbol)
+    fm_history, _ = fetch_financial_metrics_history(symbol)
+    analyst, _ = fetch_fd_analyst_estimates(symbol)
+    facts, _ = fetch_company_facts(symbol)
+    financials, _ = fetch_financials(symbol)
+
+    lines = []
+
+    lines.append(f"STOCK SNAPSHOT: {symbol}")
+    lines.append("=" * 72)
+    lines.append(f"Name     : {snapshot.get('long_name','N/A')}")
+    lines.append(f"Sector   : {snapshot.get('sector','N/A')}")
+    lines.append(f"Industry : {snapshot.get('industry','N/A')}")
+    lines.append("")
+
+    lines.append(generate_ai_fundamental_single(
+        symbol, snapshot, fm_snapshot, analyst, facts
+    ))
+
+    chart_path = build_single_charts(symbol, fm_history)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
+
+    export_pdf(
+        "\n".join(lines),
+        f"{symbol} – {snapshot.get('long_name','')}",
+        chart_path,
+        out_file
+    )
+
+    return out_file
+
+
+def run_compare_to_pdf(symbol1: str, symbol2: str, out_dir: str) -> str:
+    """
+    REQUIRED ENTRY POINT
+    """
+    from datetime import datetime
+    import os
+
+    s1 = symbol1.upper()
+    s2 = symbol2.upper()
+    os.makedirs(out_dir, exist_ok=True)
+
+    d1 = build_stock_snapshot(s1)
+    d2 = build_stock_snapshot(s2)
+
+    fm1, _ = fetch_financial_metrics_snapshot(s1)
+    fm2, _ = fetch_financial_metrics_snapshot(s2)
+
+    analyst1, _ = fetch_fd_analyst_estimates(s1)
+    analyst2, _ = fetch_fd_analyst_estimates(s2)
+
+    facts1, _ = fetch_company_facts(s1)
+    facts2, _ = fetch_company_facts(s2)
+
+    lines = []
+    lines.append(f"COMPARISON: {s1} vs {s2}")
+    lines.append("=" * 72)
+
+    lines.append(generate_ai_combined_pair(
+        s1, d1, fm1, analyst1, facts1,
+        s2, d2, fm2, analyst2, facts2
+    ))
+
+    chart_path = build_compare_charts(s1, s2)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = os.path.join(out_dir, f"{s1}_{s2}_{ts}.pdf")
+
+    export_pdf(
+        "\n".join(lines),
+        f"{s1} vs {s2}",
+        chart_path,
+        out_file
+    )
+
+    return out_file
+
+
+# =========================================================
 # 🔒 EVERYTHING ELSE UNCHANGED
 # =========================================================
 # All FD calls, pricing logic, snapshot logic,
 # PDF generation, charts, and public entry points
 # remain exactly as in your last working version.
+
