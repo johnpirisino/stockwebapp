@@ -235,6 +235,78 @@ DATA:
     except Exception as e:
         return f"AI ERROR: {e}"
 
+
+def build_stock_snapshot(symbol: str) -> Dict[str, Any]:
+    """
+    Builds a reliable stock snapshot using FinancialDatasets.ai ONLY.
+    No Yahoo Finance usage.
+    """
+
+    symbol = symbol.upper()
+
+    snapshot = {
+        "symbol": symbol,
+        "long_name": symbol,
+        "sector": "N/A",
+        "industry": "N/A",
+        "website": "N/A",
+        "current_price": None,
+        "day_change_pct": None,
+        "day_change_dollar": None,
+        "year_low": None,
+        "year_high": None,
+        "change_1y_pct": None,
+    }
+
+    # -------------------------------------------------
+    # Company Facts (name, sector, industry, website)
+    # -------------------------------------------------
+    facts, err = fetch_company_facts(symbol)
+    if facts:
+        snapshot["long_name"] = facts.get("name") or facts.get("company_name") or symbol
+        snapshot["sector"] = facts.get("sector", "N/A")
+        snapshot["industry"] = facts.get("industry", "N/A")
+        snapshot["website"] = (
+            facts.get("website")
+            or facts.get("website_url")
+            or facts.get("homepage")
+            or "N/A"
+        )
+
+    # -------------------------------------------------
+    # Price history (FD prices endpoint)
+    # -------------------------------------------------
+    df, price_err = fetch_price_history_df(symbol, days=400)
+    if df is None or df.empty or "close" not in df.columns:
+        dbg(f"{symbol}: No price data available ({price_err})")
+        return snapshot
+
+    close = df["close"].astype(float)
+
+    snapshot["current_price"] = float(close.iloc[-1])
+
+    # Day change
+    if len(close) >= 2:
+        prev = float(close.iloc[-2])
+        if prev != 0:
+            delta = snapshot["current_price"] - prev
+            snapshot["day_change_dollar"] = delta
+            snapshot["day_change_pct"] = (delta / prev) * 100.0
+
+    # 52-week high / low
+    snapshot["year_low"] = float(close.min())
+    snapshot["year_high"] = float(close.max())
+
+    # 1-year change
+    first = float(close.iloc[0])
+    if first != 0:
+        snapshot["change_1y_pct"] = (
+            (snapshot["current_price"] - first) / first
+        ) * 100.0
+
+    return snapshot
+
+
 # =========================================================
 # PUBLIC ENTRY POINTS (REQUIRED BY APP)
 # =========================================================
@@ -338,4 +410,5 @@ def run_compare_to_pdf(symbol1: str, symbol2: str, out_dir: str) -> str:
 # All FD calls, pricing logic, snapshot logic,
 # PDF generation, charts, and public entry points
 # remain exactly as in your last working version.
+
 
