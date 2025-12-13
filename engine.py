@@ -1193,9 +1193,9 @@ def export_pdf(
 
     # Title page
     story.append(Spacer(1, 2.0 * inch))
-    story.append(Paragraph("John Pirisino's Stock Analyzer", title_style))
+    story.append(Paragraph("Stock Analyzer", title_style))
     story.append(Paragraph(title_line, subtitle_style))
-    story.append(Paragraph("Generated on: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"), small_style))
+    story.append(Paragraph("Generated on: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"), subtitle_style))
     story.append(PageBreak())
 
     # Render sections
@@ -1486,3 +1486,4 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     )
 
     return out_file
+
