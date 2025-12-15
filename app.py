@@ -167,6 +167,9 @@ def create_checkout():
 
     return redirect(pay_url)
 
+@app.route("/download/<job_id>")
+def download(job_id):
+    return redirect(url_for("ready", job_id=job_id))
 
 @app.route("/processing/<job_id>")
 def processing(job_id):
@@ -255,5 +258,6 @@ def lookup():
 if __name__ == "__main__":
     # Railway will use gunicorn via Procfile, but this lets you test locally.
     app.run(debug=True)
+
 
 
