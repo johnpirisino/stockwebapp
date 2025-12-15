@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ticker Lookup</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Ticker Lookup</div>
+    <div class="topbar-links">
+      <a class="link" href="{{ url_for('index') }}">Back</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <div class="card-title">Search</div>
+      <form method="POST">
+        <label>Company / Ticker</label>
+        <input class="input" name="q" value="{{ q }}" placeholder="Apple / AAPL / Fiserv" />
+        <button class="btn primary" type="submit">Search</button>
+        <div class="hint">
+          Lookup uses best-effort search. If you want it 100% reliable, we’ll wire this to a dedicated dataset/search endpoint.
+        </div>
+      </form>
+
+      {% if err %}
+        <div class="alert error" style="margin-top:12px">{{ err }}</div>
+      {% endif %}
+    </div>
+
+    {% if results and results|length > 0 %}
+      <div class="card">
+        <div class="card-title">Results</div>
+        <table class="data-grid">
+          <tr><th>Ticker</th><th>Name</th><th>Exchange</th><th>Type</th></tr>
+          {% for r in results %}
+            <tr>
+              <td class="mono">{{ r.symbol }}</td>
+              <td>{{ r.name }}</td>
+              <td>{{ r.exchange }}</td>
+              <td>{{ r.type }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>
