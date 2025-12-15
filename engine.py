@@ -371,6 +371,40 @@ def build_stock_snapshot(symbol: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 def ai_enabled() -> bool:
     return bool(OPENAI_API_KEY) and (OpenAI is not None)
 
+def generate_ai_freelancing(snapshot: Dict[str, Any], fm_snapshot: Dict[str, Any]) -> str:
+    if not ai_enabled():
+        return "OpenAI not configured."
+
+    label = ai_company_label(snapshot)
+
+    prompt = f"""
+Return analysis only. No greetings. No disclaimers.
+
+Analyze {label} from a freelancing / independent analyst perspective.
+
+Sections:
+1) Business simplicity & transparency
+2) Predictability of cash flows
+3) Suitability for solo analysts / small funds
+4) Key metrics a freelancer should monitor
+5) Red flags or complexity risks
+
+DATA:
+{json.dumps({"snapshot": snapshot, "metrics": fm_snapshot}, indent=2)}
+""".strip()
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    res = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        temperature=0.35,
+        messages=[
+            {"role": "system", "content": "Return analysis only. No greetings."},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return res.choices[0].message.content
+
+
 
 def ai_company_label(snapshot: Dict[str, Any]) -> str:
     sym = snapshot.get("symbol") or ""
@@ -895,6 +929,14 @@ def run_single_to_pdf(symbol: str, out_dir: str) -> Tuple[str, Dict[str, Any]]:
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     pdf_path = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
 
+    ai_freelancing = None
+    try:
+        if ai_enabled():
+            ai_freelancing = generate_ai_freelancing(snapshot, fm_snapshot)
+    except Exception as e:
+        ai_freelancing = f"AI Freelancing Error: {e}"
+
+    
     report: Dict[str, Any] = {
         "mode": "single",
         "title_line": title_line,
@@ -1016,4 +1058,5 @@ def export_pdf_compare(report: Dict[str, Any], output_path: str) -> None:
                 story.append(Paragraph(safe, body_style))
 
     doc.build(story)
+
 
