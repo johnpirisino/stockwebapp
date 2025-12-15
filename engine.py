@@ -1280,113 +1280,100 @@ def export_pdf(
 # ==========================================================
 
 def run_single_to_pdf(symbol: str, out_dir: str) -> str:
-    """
-    Generates single ticker PDF report. Returns file path.
-    """
-    symbol = symbol.upper().strip()
+    symbol = symbol.upper()
     os.makedirs(out_dir, exist_ok=True)
 
-    dbg(f"run_single_to_pdf symbol={symbol}")
+    # ---------- BUILD STRUCTURED REPORT ----------
+    report = build_single_report_data(symbol)
 
-    snapshot, snap_meta = build_stock_snapshot(symbol)
+    snapshot = report["snapshot"]
+    metrics = report["metrics"]
+    fundamentals = report["fundamentals"]
+    analyst = report["analyst_estimates"]
+    insiders = report["insiders"]
+    institutional = report["institutional"]
+    news = report["news"]
 
-    # FD data
-    fm_snapshot, fm_err = fetch_financial_metrics_snapshot(symbol)
-    fm_history, _ = fetch_financial_metrics_history(symbol, "annual", 10)
-    analyst, analyst_err = fetch_analyst_estimates(symbol)
-    facts, facts_err = fetch_company_facts(symbol)
-    financials, fin_err = fetch_financials(symbol, "annual", 10)
-    news, news_err = fetch_news(symbol, 5)
-    insider, insider_err = fetch_insider_transactions(symbol, 20)
-    inst, inst_err = fetch_institutional_ownership(symbol, 200)
+    # ---------- BUILD TEXT FOR PDF ----------
+    lines: List[str] = []
 
-    # AI
-    company_name = safe_str(snapshot.get("long_name"), symbol)
-    ai_fund = generate_ai_fundamental_single(symbol, snapshot, fm_snapshot, analyst, facts)
-    ai_free = generate_ai_freelancing_single(symbol, company_name)
+    lines.append("=" * 72)
+    lines.append(f"STOCK SNAPSHOT: {symbol}")
+    lines.append("=" * 72)
+    lines.append("")
+    lines.append(f"Name     : {snapshot.get('long_name')}")
+    lines.append(f"Sector   : {snapshot.get('sector')}")
+    lines.append(f"Industry : {snapshot.get('industry')}")
+    lines.append(f"Website  : {snapshot.get('website')}")
+    lines.append("")
 
-    # Tables
-    fundamentals_table, fundamentals_err = build_multi_year_fundamentals_rows(financials)
-    metrics_table = build_financial_metrics_rows(fm_snapshot)
-    analyst_table = build_analyst_estimates_rows(analyst)
-    insider_table = build_insider_rows(insider, 10)
-    inst_table = build_institutional_rows(inst, 10)
+    lines.append("PRICE")
+    lines.append("-" * 72)
+    lines.append(f"Current Price : {fmt_number(snapshot.get('current_price'))}")
+    lines.append(f"Day Change %  : {fmt_number(snapshot.get('day_change_pct'))}%")
+    lines.append(f"Day Change $  : {fmt_number(snapshot.get('day_change_dollar'))}")
+    lines.append(f"52W Low       : {fmt_number(snapshot.get('year_low'))}")
+    lines.append(f"52W High      : {fmt_number(snapshot.get('year_high'))}")
+    lines.append(f"1Y Change %   : {fmt_number(snapshot.get('change_1y_pct'))}%")
+    lines.append("")
 
-    # Build PDF sections
-    sections: List[Dict[str, Any]] = []
+    # ---------- FUNDAMENTALS ----------
+    lines.append("MULTI-YEAR FUNDAMENTALS (Annual)")
+    lines.append("-" * 72)
+    for row in fundamentals:
+        lines.append(" | ".join(row))
+    lines.append("")
 
-    # Snapshot header + overview grid-like table
-    sections.append({"kind": "header", "text": f"STOCK SNAPSHOT: {symbol}"})
+    # ---------- FINANCIAL METRICS ----------
+    lines.append("FINANCIAL METRICS SNAPSHOT")
+    lines.append("-" * 72)
+    for label, value in metrics:
+        lines.append(f"{label:<30}: {value}")
+    lines.append("")
 
-    snap_rows = [
-        ["Field", "Value"],
-        ["Name", safe_str(snapshot.get("long_name"))],
-        ["Sector", safe_str(snapshot.get("sector"))],
-        ["Industry", safe_str(snapshot.get("industry"))],
-        ["Website", safe_str(snapshot.get("website"))],
-        ["Price Source", safe_str(snap_meta.get("price_source"), "N/A")],
-    ]
-    sections.append({"kind": "table", "title": "Company Overview", "data": snap_rows, "col_widths": [140, 340]})
+    # ---------- ANALYST ESTIMATES ----------
+    lines.append("ANALYST ESTIMATES")
+    lines.append("-" * 72)
+    for row in analyst:
+        lines.append(" | ".join(row))
+    lines.append("")
 
-    price_rows = [
-        ["Metric", "Value"],
-        ["Current Price", fmt_number(snapshot.get("current_price"), 2)],
-        ["Day Change (%)", fmt_pct(snapshot.get("day_change_pct"), 2)],
-        ["Day Change ($)", fmt_number(snapshot.get("day_change_dollar"), 2)],
-        ["52W Low", fmt_number(snapshot.get("year_low"), 2)],
-        ["52W High", fmt_number(snapshot.get("year_high"), 2)],
-        ["1Y Change (%)", fmt_pct(snapshot.get("change_1y_pct"), 2)],
-    ]
-    sections.append({"kind": "table", "title": "Price & Performance", "data": price_rows, "col_widths": [180, 300]})
+    # ---------- INSIDERS ----------
+    lines.append("INSIDER TRANSACTIONS")
+    lines.append("-" * 72)
+    for row in insiders:
+        lines.append(" | ".join(row))
+    lines.append("")
 
-    # AI
-    sections.append({"kind": "header", "text": "AI FUNDAMENTAL SUMMARY"})
-    sections.append({"kind": "paragraph", "text": ai_fund})
-    sections.append({"kind": "header", "text": "AI FREELANCING SUMMARY"})
-    sections.append({"kind": "paragraph", "text": ai_free})
+    # ---------- INSTITUTIONAL ----------
+    lines.append("INSTITUTIONAL OWNERSHIP")
+    lines.append("-" * 72)
+    for row in institutional:
+        lines.append(" | ".join(row))
+    lines.append("")
 
-    # Multi-year fundamentals grid
-    sections.append({"kind": "table", "title": "Multi-Year Fundamentals (Annual)", "data": fundamentals_table})
+    # ---------- NEWS ----------
+    lines.append("LATEST NEWS")
+    lines.append("-" * 72)
+    for n in news:
+        lines.append(f"{n.get('date')} - {n.get('title')}")
+        lines.append(n.get("url", ""))
+        lines.append("")
 
-    # Financial metrics grid
-    sections.append({"kind": "table", "title": "Financial Metrics Snapshot (FinancialDatasets.ai)", "data": metrics_table, "col_widths": [250, 230]})
-
-    # Analyst estimates
-    sections.append({"kind": "table", "title": "Analyst Estimates (Annual)", "data": analyst_table, "col_widths": [150, 90, 240]})
-
-    # Insider / Institutional
-    sections.append({"kind": "table", "title": "Insider Transactions (Recent)", "data": insider_table, "col_widths": [80, 160, 110, 70, 60]})
-    sections.append({"kind": "table", "title": "Institutional Ownership (Top 10)", "data": inst_table, "col_widths": [330, 150]})
-
-    # News as paragraphs (simple but clean)
-    sections.append({"kind": "header", "text": "Latest News"})
-    if news:
-        for n in news:
-            sections.append({"kind": "paragraph", "text": f"{safe_str(n.get('date'))} — {safe_str(n.get('title'))}\n{safe_str(n.get('url'))}"})
-    else:
-        sections.append({"kind": "paragraph", "text": f"No news available. {news_err or ''}".strip()})
-
-    # Debug footer (only if DEBUG)
-    if DEBUG and snap_meta.get("errors"):
-        sections.append({"kind": "header", "text": "DEBUG (Engine)"})
-        sections.append({"kind": "paragraph", "text": "\n".join([str(x) for x in snap_meta.get("errors", [])])})
-
-    # Charts
-    chart_path = build_single_charts(symbol, fm_history)
+    # ---------- CHART ----------
+    chart_path = build_single_charts(symbol, None)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
-    title_line = f"{symbol} — {safe_str(snapshot.get('long_name'), symbol)}"
 
     export_pdf(
-        title_line=title_line,
-        sections=sections,
-        chart_path=chart_path,
-        output_path=out_file,
+        "\n".join(lines),
+        f"{symbol} – {snapshot.get('long_name')}",
+        chart_path,
+        out_file
     )
 
     return out_file
-
 
 def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     """
@@ -1518,5 +1505,6 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     )
 
     return out_file
+
 
 
