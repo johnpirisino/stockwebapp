@@ -806,6 +806,13 @@ def export_pdf(report: Dict[str, Any], output_path: str) -> None:
     else:
         story.append(Paragraph("No metrics snapshot available.", body_style))
 
+    if report.get("ai_freelancing"):
+        story.append(PageBreak())
+        story.append(Paragraph("AI FREELANCING VIEW", h_style))
+        for line in report["ai_freelancing"].split("\n"):
+            story.append(Paragraph(line, body_style))
+
+    
     # Analyst estimates
     story.append(Paragraph("ANALYST ESTIMATES (Annual)", h_style))
     analyst = report.get("analyst") or []
@@ -1058,5 +1065,6 @@ def export_pdf_compare(report: Dict[str, Any], output_path: str) -> None:
                 story.append(Paragraph(safe, body_style))
 
     doc.build(story)
+
 
 
