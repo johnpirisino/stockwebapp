@@ -566,10 +566,6 @@ else:
     r["eps_yoy"] = None
 
 
-
-    return rows
-
-
 def metrics_grid_pairs(fm: Optional[Dict[str, Any]]) -> List[Tuple[str, str]]:
     if not fm:
         return []
@@ -1063,6 +1059,7 @@ def export_pdf_compare(report: Dict[str, Any], output_path: str) -> None:
                 story.append(Paragraph(safe, body_style))
 
     doc.build(story)
+
 
 
 
