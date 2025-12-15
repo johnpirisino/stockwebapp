@@ -1,82 +1,134 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <title>{{ report.symbol }} Report</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script>
-        function showTab(id) {
-            document.querySelectorAll(".tab").forEach(t => t.style.display = "none");
-            document.getElementById(id).style.display = "block";
-        }
-    </script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ report.title_line }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-
-<div class="header">
-    <h1>{{ report.symbol }} – {{ report.snapshot.long_name }}</h1>
-    <div class="tabs">
-        <button onclick="showTab('price')">Price</button>
-        <button onclick="showTab('fundamentals')">Fundamentals</button>
-        <button onclick="showTab('metrics')">Metrics</button>
-        <button onclick="showTab('news')">News</button>
+  <div class="topbar">
+    <div class="brand">Stock Analyzer</div>
+    <div class="topbar-links">
+      <a class="link" href="{{ url_for('index') }}">New Report</a>
+      <a class="btn small" href="{{ url_for('pdf', job_id=report.job_id) }}">Download PDF</a>
     </div>
-</div>
+  </div>
 
-<!-- PRICE -->
-<div id="price" class="tab">
-    <div class="card">
-        <h2>Price Snapshot</h2>
-        <div>Current: {{ report.snapshot.current_price }}</div>
-        <div>Day %: {{ report.snapshot.day_change_pct }}</div>
-        <div>52W Low: {{ report.snapshot.year_low }}</div>
-        <div>52W High: {{ report.snapshot.year_high }}</div>
-    </div>
-</div>
+  <div class="container">
 
-<!-- FUNDAMENTALS -->
-<div id="fundamentals" class="tab" style="display:none">
-    <div class="card full">
-        <h2>Multi-Year Fundamentals</h2>
-        <table>
-            {% for row in report.fundamentals %}
-            <tr>
-                {% for col in row %}
-                <td>{{ col }}</td>
-                {% endfor %}
-            </tr>
-            {% endfor %}
+    <div class="page-title">{{ report.title_line }}</div>
+    <div class="subtle">Generated: {{ report.generated_at }}</div>
+
+    {% if report.mode == "single" %}
+      {% set s = report.snapshot %}
+
+      <div class="card">
+        <div class="card-title">Stock Snapshot</div>
+        <table class="data-grid">
+          <tr><th>Field</th><th>Value</th></tr>
+          <tr><td>Ticker</td><td>{{ s.symbol }}</td></tr>
+          <tr><td>Company</td><td>{{ s.company_name }}</td></tr>
+          <tr><td>Sector</td><td>{{ s.sector }}</td></tr>
+          <tr><td>Industry</td><td>{{ s.industry }}</td></tr>
+          <tr><td>Website</td><td>{{ s.website }}</td></tr>
+          <tr><td>Current Price</td><td>{{ s.current_price }}</td></tr>
+          <tr><td>Day Change</td><td>{{ s.day_change_dollar }} ({{ s.day_change_pct }}%)</td></tr>
+          <tr><td>52W Range</td><td>{{ s.year_low }} – {{ s.year_high }}</td></tr>
+          <tr><td>1Y Change</td><td>{{ s.change_1y_pct }}%</td></tr>
         </table>
-    </div>
-</div>
+      </div>
 
-<!-- METRICS -->
-<div id="metrics" class="tab" style="display:none">
-    <div class="card">
-        <h2>Financial Metrics</h2>
-        <table>
-            {% for label, value in report.metrics %}
+      <div class="card">
+        <div class="card-title">Multi-Year Fundamentals (Annual)</div>
+        {% if report.fundamentals_rows and report.fundamentals_rows|length > 0 %}
+          <table class="data-grid">
             <tr>
-                <td>{{ label }}</td>
-                <td>{{ value }}</td>
+              <th>Year</th><th>Sales</th><th>GP</th><th>OpInc</th><th>NetInc</th><th>EPS</th>
+              <th>GP%</th><th>OP%</th><th>NI%</th><th>Sls YoY</th><th>EPS YoY</th>
             </tr>
+            {% for r in report.fundamentals_rows %}
+              <tr>
+                <td>{{ r.year }}</td>
+                <td class="num">{{ r.revenue }}</td>
+                <td class="num">{{ r.gross_profit }}</td>
+                <td class="num">{{ r.operating_income }}</td>
+                <td class="num">{{ r.net_income }}</td>
+                <td class="num">{{ r.eps }}</td>
+                <td class="num">{{ r.gp_margin }}</td>
+                <td class="num">{{ r.op_margin }}</td>
+                <td class="num">{{ r.ni_margin }}</td>
+                <td class="num">{{ r.rev_yoy }}</td>
+                <td class="num">{{ r.eps_yoy }}</td>
+              </tr>
             {% endfor %}
-        </table>
-    </div>
-</div>
+          </table>
+        {% else %}
+          <div class="hint">No fundamentals available. {{ report.financials_error }}</div>
+        {% endif %}
+      </div>
 
-<!-- NEWS -->
-<div id="news" class="tab" style="display:none">
-    <div class="card">
-        <h2>Latest News</h2>
-        {% for n in report.news %}
-        <p>
-            <strong>{{ n.date }}</strong><br>
-            {{ n.title }}<br>
-            <a href="{{ n.url }}" target="_blank">Read</a>
-        </p>
-        {% endfor %}
-    </div>
-</div>
+      <div class="card">
+        <div class="card-title">Financial Metrics Snapshot</div>
+        {% if report.metrics_pairs and report.metrics_pairs|length > 0 %}
+          <div class="metrics-2up">
+            {% for k,v in report.metrics_pairs %}
+              <div class="metric">
+                <div class="metric-k">{{ k }}</div>
+                <div class="metric-v">{{ v }}</div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="hint">No metrics snapshot available. {{ report.fm_error }}</div>
+        {% endif %}
+      </div>
 
+      <div class="card">
+        <div class="card-title">Analyst Estimates</div>
+        {% if report.analyst and report.analyst|length > 0 %}
+          <table class="data-grid">
+            <tr><th>Fiscal Period</th><th>EPS Estimate</th></tr>
+            {% for e in report.analyst %}
+              <tr>
+                <td>{{ e.fiscal_period }}</td>
+                <td class="num">{{ e.earnings_per_share }}</td>
+              </tr>
+            {% endfor %}
+          </table>
+        {% else %}
+          <div class="hint">No analyst estimates. {{ report.analyst_error }}</div>
+        {% endif %}
+      </div>
+
+      <div class="card">
+        <div class="card-title">Latest News</div>
+        {% if report.news and report.news|length > 0 %}
+          {% for n in report.news %}
+            <div class="news-item">
+              <div class="news-title">{{ n.date }} — {{ n.title }}</div>
+              <div class="news-url">{{ n.url }}</div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="hint">No news. {{ report.news_error }}</div>
+        {% endif %}
+      </div>
+
+      {% if report.ai_text %}
+        <div class="card">
+          <div class="card-title">AI Analysis</div>
+          <pre class="ai-box">{{ report.ai_text }}</pre>
+        </div>
+      {% endif %}
+
+    {% else %}
+      <div class="card">
+        <div class="card-title">Comparison Mode</div>
+        <div class="hint">Your compare PDF is available via Download. GUI compare view can be expanded next.</div>
+      </div>
+    {% endif %}
+
+  </div>
 </body>
 </html>
