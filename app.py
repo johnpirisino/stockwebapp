@@ -215,6 +215,14 @@ def analyze():
         report=report
     )
 
+REPORT_CACHE[job_id] = {
+    "symbol": symbol,
+    "snapshot": snapshot,
+    "fundamentals": fundamentals,
+    "metrics": fm_snapshot,
+    "pdf_path": pdf_path,
+}
+
 
 # ---------------------------------------
 # TICKER LOOKUP PAGE
@@ -255,6 +263,7 @@ def lookup():
 if __name__ == "__main__":
     # Railway will use gunicorn via Procfile, but this lets you test locally.
     app.run(debug=True)
+
 
 
 
