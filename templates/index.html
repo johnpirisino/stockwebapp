@@ -1,31 +1,55 @@
-{% extends "base.html" %}
-{% block content %}
-
-<div class="card-premium">
-  <h2>Generate Stock PDF Report</h2>
-  <p class="muted">
-    Enter one ticker for a full AI-powered report, or two tickers for a comparison.
-  </p>
-
-  <form method="POST" action="{{ url_for('create_checkout') }}" class="form-grid">
-    <div class="form-group">
-      <label for="ticker1">Ticker 1 (required)</label>
-      <input type="text" id="ticker1" name="ticker1" placeholder="AAPL">
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Stock Analyzer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">YakWithYourData • Stock Analyzer</div>
+    <div class="topbar-links">
+      <a class="link" href="{{ url_for('lookup') }}">Ticker Lookup</a>
     </div>
+  </div>
 
-    <div class="form-group">
-      <label for="ticker2">Ticker 2 (optional)</label>
-      <input type="text" id="ticker2" name="ticker2" placeholder="MSFT">
+  <div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="alerts">
+          {% for category, msg in messages %}
+            <div class="alert {{ category }}">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Single Stock Report</div>
+        <form method="POST" action="{{ url_for('generate') }}">
+          <input type="hidden" name="mode" value="single">
+          <label>Ticker</label>
+          <input class="input" name="ticker1" placeholder="AAPL" autocomplete="off" />
+          <button class="btn primary" type="submit">Generate Report</button>
+          <div class="hint">PDF will be generated, then you’ll see the full report screen with a Download button.</div>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Compare Two Stocks</div>
+        <form method="POST" action="{{ url_for('generate') }}">
+          <input type="hidden" name="mode" value="compare">
+          <label>Ticker 1</label>
+          <input class="input" name="ticker1" placeholder="AAPL" autocomplete="off" />
+          <label>Ticker 2</label>
+          <input class="input" name="ticker2" placeholder="MSFT" autocomplete="off" />
+          <button class="btn" type="submit">Generate Comparison</button>
+          <div class="hint">Comparison report will show side-by-side plus AI analysis (if enabled).</div>
+        </form>
+      </div>
     </div>
-
-    <div class="form-actions">
-      <button type="submit" class="btn-primary">Generate Report</button>
-    </div>
-  </form>
-
-  <p class="muted small">
-    Not sure about the ticker? Use the <a href="{{ url_for('lookup') }}">Ticker Lookup</a> page.
-  </p>
-</div>
-
-{% endblock %}
+  </div>
+</body>
+</html>
