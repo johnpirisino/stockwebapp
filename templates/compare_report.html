@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ report.symbol_1 }} vs {{ report.symbol_2 }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+    <h1>{{ report.symbol_1 }} vs {{ report.symbol_2 }}</h1>
+</div>
+
+<div class="grid">
+
+<!-- SNAPSHOT -->
+<div class="card">
+    <h2>{{ report.symbol_1 }} Snapshot</h2>
+    <div>Price: {{ report.snapshot_1.current_price }}</div>
+    <div>1Y %: {{ report.snapshot_1.change_1y_pct }}</div>
+</div>
+
+<div class="card">
+    <h2>{{ report.symbol_2 }} Snapshot</h2>
+    <div>Price: {{ report.snapshot_2.current_price }}</div>
+    <div>1Y %: {{ report.snapshot_2.change_1y_pct }}</div>
+</div>
+
+<!-- METRICS -->
+<div class="card full">
+    <h2>Financial Metrics</h2>
+    <table>
+        {% for i in range(report.metrics_1|length) %}
+        <tr>
+            <td>{{ report.metrics_1[i][0] }}</td>
+            <td>{{ report.metrics_1[i][1] }}</td>
+            <td>{{ report.metrics_2[i][1] }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<!-- FUNDAMENTALS -->
+<div class="card full">
+    <h2>Multi-Year Fundamentals</h2>
+    <table>
+        {% for row in report.fundamentals %}
+        <tr>
+            {% for col in row %}
+            <td>{{ col }}</td>
+            {% endfor %}
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+</div>
+</body>
+</html>
