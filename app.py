@@ -9,7 +9,7 @@ from flask import (
     url_for, jsonify, send_file
 )
 
-from engine import run_single_to_pdf, run_compare_to_pdf
+from engine import run_single_to_pdf, run_compare_to_pdf, build_single_report_data
 
 app = Flask(__name__)
 
@@ -115,6 +115,14 @@ def index():
     # Do NOT pre-populate last-used tickers
     return render_template("index.html", error=None)
 
+    report = build_single_report_data(symbol)
+    return render_template("report.html", report=report)
+
+@app.route("/view-report")
+def view_report():
+    symbol = request.args.get("symbol", "").upper()
+    if not symbol:
+        return "Missing symbol", 400
 
 @app.route("/create_checkout", methods=["POST"])
 def create_checkout():
@@ -243,3 +251,4 @@ def lookup():
 if __name__ == "__main__":
     # Railway will use gunicorn via Procfile, but this lets you test locally.
     app.run(debug=True)
+
