@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ report.symbol }} Report</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        function showTab(id) {
+            document.querySelectorAll(".tab").forEach(t => t.style.display = "none");
+            document.getElementById(id).style.display = "block";
+        }
+    </script>
+</head>
+<body>
+
+<div class="header">
+    <h1>{{ report.symbol }} – {{ report.snapshot.long_name }}</h1>
+    <div class="tabs">
+        <button onclick="showTab('price')">Price</button>
+        <button onclick="showTab('fundamentals')">Fundamentals</button>
+        <button onclick="showTab('metrics')">Metrics</button>
+        <button onclick="showTab('news')">News</button>
+    </div>
+</div>
+
+<!-- PRICE -->
+<div id="price" class="tab">
+    <div class="card">
+        <h2>Price Snapshot</h2>
+        <div>Current: {{ report.snapshot.current_price }}</div>
+        <div>Day %: {{ report.snapshot.day_change_pct }}</div>
+        <div>52W Low: {{ report.snapshot.year_low }}</div>
+        <div>52W High: {{ report.snapshot.year_high }}</div>
+    </div>
+</div>
+
+<!-- FUNDAMENTALS -->
+<div id="fundamentals" class="tab" style="display:none">
+    <div class="card full">
+        <h2>Multi-Year Fundamentals</h2>
+        <table>
+            {% for row in report.fundamentals %}
+            <tr>
+                {% for col in row %}
+                <td>{{ col }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+
+<!-- METRICS -->
+<div id="metrics" class="tab" style="display:none">
+    <div class="card">
+        <h2>Financial Metrics</h2>
+        <table>
+            {% for label, value in report.metrics %}
+            <tr>
+                <td>{{ label }}</td>
+                <td>{{ value }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+
+<!-- NEWS -->
+<div id="news" class="tab" style="display:none">
+    <div class="card">
+        <h2>Latest News</h2>
+        {% for n in report.news %}
+        <p>
+            <strong>{{ n.date }}</strong><br>
+            {{ n.title }}<br>
+            <a href="{{ n.url }}" target="_blank">Read</a>
+        </p>
+        {% endfor %}
+    </div>
+</div>
+
+</body>
+</html>
