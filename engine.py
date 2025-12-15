@@ -200,6 +200,25 @@ def fd_get_json(path: str, params: Optional[Dict[str, Any]] = None, timeout: Opt
     except Exception as e:
         dbg(f"FD GET {path} exception: {e}")
         return None, str(e), None, url
+        
+def export_single_report_from_data(report: dict) -> str:
+    symbol = report["symbol"]
+    out_dir = "generated_reports"
+    os.makedirs(out_dir, exist_ok=True)
+
+    text = build_text_from_report(report)
+    chart_path = report.get("chart_path")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_file = os.path.join(out_dir, f"{symbol}_{ts}.pdf")
+
+    export_pdf(
+        text,
+        f"{symbol} – {report['snapshot']['long_name']}",
+        chart_path,
+        out_file
+    )
+    return out_file
 
 
 # ==========================================================
@@ -1505,6 +1524,7 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     )
 
     return out_file
+
 
 
 
