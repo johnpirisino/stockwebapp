@@ -566,8 +566,6 @@ else:
     r["eps_yoy"] = None
 
 
-        prev_rev = rev
-        prev_eps = eps
 
     return rows
 
@@ -1065,6 +1063,7 @@ def export_pdf_compare(report: Dict[str, Any], output_path: str) -> None:
                 story.append(Paragraph(safe, body_style))
 
     doc.build(story)
+
 
 
 
