@@ -803,6 +803,38 @@ def build_multi_year_fundamentals_rows(financials: Optional[Dict[str, Any]]) -> 
 
     return table, None
 
+def build_single_report_data(symbol: str) -> Dict[str, Any]:
+    snapshot, snap_meta = build_stock_snapshot(symbol)
+
+    fm_snapshot, _ = fetch_financial_metrics_snapshot(symbol)
+    fm_history, _ = fetch_financial_metrics_history(symbol, "annual", 10)
+    analyst, _ = fetch_analyst_estimates(symbol)
+    facts, _ = fetch_company_facts(symbol)
+    financials, _ = fetch_financials(symbol, "annual", 10)
+    news, _ = fetch_news(symbol, 5)
+    insider, _ = fetch_insider_transactions(symbol, 20)
+    inst, _ = fetch_institutional_ownership(symbol, 200)
+
+    fundamentals_table, _ = build_multi_year_fundamentals_rows(financials)
+    metrics_table = build_financial_metrics_rows(fm_snapshot)
+    analyst_table = build_analyst_estimates_rows(analyst)
+    insider_table = build_insider_rows(insider, 10)
+    inst_table = build_institutional_rows(inst, 10)
+
+    return {
+        "symbol": symbol,
+        "snapshot": snapshot,
+        "snapshot_meta": snap_meta,
+        "fundamentals": fundamentals_table,
+        "metrics": metrics_table,
+        "analyst_estimates": analyst_table,
+        "insiders": insider_table,
+        "institutional": inst_table,
+        "news": news,
+        "charts": {
+            "price_source": snap_meta.get("price_source")
+        }
+    }
 
 def build_financial_metrics_rows(fm: Optional[Dict[str, Any]]) -> List[List[Any]]:
     """
@@ -1486,4 +1518,5 @@ def run_compare_to_pdf(s1: str, s2: str, out_dir: str) -> str:
     )
 
     return out_file
+
 
