@@ -200,15 +200,19 @@ def ready(job_id):
     return render_template("ready.html", job_id=job_id, filename=filename)
 
 
-@app.route("/download/<job_id>")
-def download(job_id):
-    job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return "File not ready.", 400
-    return send_file(
-        job["file_path"],
-        as_attachment=True,
-        download_name=os.path.basename(job["file_path"]),
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    symbol = request.form["symbol"].upper()
+
+    # Build report ONCE
+    report = build_single_report_data(symbol)
+
+    # Store in session for PDF download
+    session["last_report"] = report
+
+    return render_template(
+        "report.html",
+        report=report
     )
 
 
@@ -251,4 +255,5 @@ def lookup():
 if __name__ == "__main__":
     # Railway will use gunicorn via Procfile, but this lets you test locally.
     app.run(debug=True)
+
 
