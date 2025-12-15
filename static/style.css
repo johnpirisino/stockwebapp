@@ -1,43 +1,297 @@
-body {
-    background: #0f172a;
-    color: #e5e7eb;
-    font-family: Inter, Arial, sans-serif;
+/* ============================================================
+   GLOBAL RESET / BASE
+   ============================================================ */
+
+* {
+    box-sizing: border-box;
 }
 
-.header {
-    padding: 20px;
-    border-bottom: 1px solid #1f2933;
+body {
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    background-color: #0b1d2d;
+    color: #e6eef7;
 }
+
+/* ============================================================
+   LINKS
+   ============================================================ */
+
+a {
+    color: #66b3ff;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+/* ============================================================
+   MAIN LAYOUT
+   ============================================================ */
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 20px;
+}
+
+/* ============================================================
+   LANDING / TICKER ENTRY SCREEN
+   ============================================================ */
+
+.hero {
+    text-align: center;
+    margin-top: 80px;
+}
+
+.hero h1 {
+    font-size: 36px;
+    margin-bottom: 12px;
+    color: #ffffff;
+}
+
+.hero p {
+    font-size: 16px;
+    color: #b7c7d6;
+    margin-bottom: 30px;
+}
+
+.form-card {
+    max-width: 480px;
+    margin: 0 auto;
+    background: #10283f;
+    padding: 28px;
+    border-radius: 10px;
+    box-shadow: 0 0 25px rgba(0,0,0,.45);
+}
+
+.form-card label {
+    display: block;
+    text-align: left;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: #9fb4c8;
+}
+
+.form-card input {
+    width: 100%;
+    padding: 12px;
+    border-radius: 6px;
+    border: none;
+    margin-bottom: 16px;
+    font-size: 15px;
+}
+
+.form-card button {
+    width: 100%;
+    padding: 12px;
+    background: #1e88e5;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.form-card button:hover {
+    background: #1565c0;
+}
+
+/* ============================================================
+   HEADER BAR (REPORT PAGE)
+   ============================================================ */
+
+.header {
+    background: #081826;
+    padding: 18px 30px;
+    border-bottom: 1px solid #1e3a56;
+}
+
+.header h2 {
+    margin: 0;
+    font-size: 22px;
+    color: #ffffff;
+}
+
+.header span {
+    font-size: 13px;
+    color: #9fb4c8;
+}
+
+/* ============================================================
+   ACTION BAR
+   ============================================================ */
+
+.action-bar {
+    padding: 15px 30px;
+    background: #0f2538;
+    border-bottom: 1px solid #1e3a56;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.action-bar button {
+    background: #2c7be5;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.action-bar button:hover {
+    background: #1b5fc1;
+}
+
+/* ============================================================
+   TABS
+   ============================================================ */
+
+.tabs {
+    padding: 15px 30px;
+    background: #0f2538;
+    border-bottom: 1px solid #1e3a56;
+}
+
+.tabs button {
+    background: #1e3a56;
+    color: #e6eef7;
+    border: none;
+    padding: 10px 16px;
+    margin-right: 6px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.tabs button.active {
+    background: #2c7be5;
+}
+
+.tabs button:hover {
+    background: #2c567a;
+}
+
+/* ============================================================
+   GRID LAYOUT (BLOOMBERG STYLE)
+   ============================================================ */
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
-    padding: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 20px;
+    padding: 25px;
 }
 
+/* ============================================================
+   CARDS
+   ============================================================ */
+
 .card {
-    background: #020617;
-    border: 1px solid #1f2933;
-    padding: 16px;
+    background: #10283f;
+    border-radius: 8px;
+    padding: 16px 18px;
+    box-shadow: 0 0 18px rgba(0,0,0,.4);
 }
 
 .card.full {
-    grid-column: span 2;
+    grid-column: 1 / -1;
 }
 
-h2 {
-    color: #38bdf8;
-    font-size: 14px;
-    margin-bottom: 8px;
+.card h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 16px;
+    color: #ffffff;
+    border-bottom: 1px solid #1e3a56;
+    padding-bottom: 6px;
 }
 
-table {
+/* ============================================================
+   TABLES (METRICS, FUNDAMENTALS, OWNERSHIP)
+   ============================================================ */
+
+.card table {
     width: 100%;
     border-collapse: collapse;
+    font-size: 13px;
 }
 
-td {
+.card table td,
+.card table th {
+    padding: 6px 8px;
+    border-bottom: 1px solid #1e3a56;
+}
+
+.card table th {
+    text-align: left;
+    color: #9fb4c8;
+    font-weight: normal;
+}
+
+.card table td.value {
+    text-align: right;
+    font-weight: 600;
+}
+
+/* ============================================================
+   FUNDAMENTALS GRID (EXCEL STYLE)
+   ============================================================ */
+
+.fundamentals-table {
+    overflow-x: auto;
+}
+
+.fundamentals-table table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.fundamentals-table th {
+    background: #081826;
+    color: #9fb4c8;
     padding: 6px;
-    border-bottom: 1px solid #1f2933;
+    border-bottom: 1px solid #1e3a56;
+    text-align: right;
+}
+
+.fundamentals-table td {
+    padding: 6px;
+    border-bottom: 1px solid #1e3a56;
+    text-align: right;
+}
+
+.fundamentals-table th:first-child,
+.fundamentals-table td:first-child {
+    text-align: left;
+    font-weight: bold;
+}
+
+/* ============================================================
+   NEWS LIST
+   ============================================================ */
+
+.news-item {
+    margin-bottom: 10px;
+}
+
+.news-item span {
+    color: #9fb4c8;
+    font-size: 12px;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+
+.footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+    color: #9fb4c8;
+    border-top: 1px solid #1e3a56;
 }
