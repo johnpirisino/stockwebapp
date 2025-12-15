@@ -514,20 +514,23 @@ def build_fundamentals_rows(financials: Optional[Dict[str, Any]]) -> List[Dict[s
                 return float(a) / float(b)
             except Exception:
                 return None
+def r4(x):
+    return round(x, 4) if x is not None else None
 
-        r["gp_margin"] = safe_div(gp, rev)
-        r["op_margin"] = safe_div(op, rev)
-        r["ni_margin"] = safe_div(ni, rev)
+r["gp_margin"] = r4(safe_div(gp, rev))
+r["op_margin"] = r4(safe_div(op, rev))
+r["ni_margin"] = r4(safe_div(ni, rev))
 
-        if prev_rev not in (None, 0) and rev not in (None, 0):
-            r["rev_yoy"] = (float(rev) - float(prev_rev)) / float(prev_rev)
-        else:
-            r["rev_yoy"] = None
+if prev_rev not in (None, 0) and rev not in (None, 0):
+    r["rev_yoy"] = r4((float(rev) - float(prev_rev)) / float(prev_rev))
+else:
+    r["rev_yoy"] = None
 
-        if prev_eps not in (None, 0) and eps not in (None, 0):
-            r["eps_yoy"] = (float(eps) - float(prev_eps)) / float(prev_eps)
-        else:
-            r["eps_yoy"] = None
+if prev_eps not in (None, 0) and eps not in (None, 0):
+    r["eps_yoy"] = r4((float(eps) - float(prev_eps)) / float(prev_eps))
+else:
+    r["eps_yoy"] = None
+
 
         prev_rev = rev
         prev_eps = eps
@@ -1013,3 +1016,4 @@ def export_pdf_compare(report: Dict[str, Any], output_path: str) -> None:
                 story.append(Paragraph(safe, body_style))
 
     doc.build(story)
+
