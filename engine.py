@@ -315,3 +315,40 @@ def run_compare_to_pdf(t1: str, t2: str, out_dir: str) -> str:
     out = os.path.join(out_dir, f"{t1}_{t2}_{ts}.pdf")
     export_pdf(f"{t1} vs {t2}", blocks, None, out)
     return out
+
+# ============================================================
+# Ticker lookup (safe stub for UI autocomplete)
+# ============================================================
+
+def lookup_tickers(query: str):
+    """
+    Lightweight ticker lookup placeholder.
+    Keeps app.py imports stable.
+    Replace later with FinancialDatasets / Polygon / Nasdaq API.
+    """
+    if not query:
+        return []
+
+    query = query.upper().strip()
+
+    # Minimal fallback examples
+    COMMON = {
+        "AAPL": "Apple Inc",
+        "MSFT": "Microsoft Corp",
+        "GOOGL": "Alphabet Inc",
+        "AMZN": "Amazon.com Inc",
+        "META": "Meta Platforms Inc",
+        "TSLA": "Tesla Inc",
+        "NVDA": "NVIDIA Corp",
+        "FI": "Fiserv Inc",
+    }
+
+    results = []
+    for ticker, name in COMMON.items():
+        if query in ticker or query in name.upper():
+            results.append({
+                "ticker": ticker,
+                "name": name
+            })
+
+    return results
