@@ -298,23 +298,96 @@ Day Change: {fmt(snapshot['day_change'])} ({fmt(snapshot['day_change_pct'])}%)
     export_pdf(f"{ticker} Report", blocks, None, out)
     return out
 
-def run_compare_to_pdf(t1: str, t2: str, out_dir: str) -> str:
+def run_compare_to_pdf(s1: str, s2: str, out_dir: str):
+    s1 = s1.upper()
+    s2 = s2.upper()
     os.makedirs(out_dir, exist_ok=True)
 
-    s1 = build_stock_snapshot(t1)
-    s2 = build_stock_snapshot(t2)
+    # -------------------------------
+    # DATA COLLECTION
+    # -------------------------------
+    snap1 = build_stock_snapshot(s1)
+    snap2 = build_stock_snapshot(s2)
 
-    blocks = [
-        f"""COMPARISON
-{t1}: {fmt(s1['current_price'])}
-{t2}: {fmt(s2['current_price'])}
-"""
-    ]
+    fm1, _ = fetch_financial_metrics_snapshot(s1)
+    fm2, _ = fetch_financial_metrics_snapshot(s2)
 
+    analyst1, _ = fetch_fd_analyst_estimates(s1)
+    analyst2, _ = fetch_fd_analyst_estimates(s2)
+
+    facts1, _ = fetch_company_facts(s1)
+    facts2, _ = fetch_company_facts(s2)
+
+    news1, _ = fetch_news(s1)
+    news2, _ = fetch_news(s2)
+
+    inst1, _ = fetch_institutional(s1)
+    inst2, _ = fetch_institutional(s2)
+
+    insider1, _ = fetch_insider_trades(s1)
+    insider2, _ = fetch_insider_trades(s2)
+
+    # -------------------------------
+    # STRUCTURED REPORT (GUI + PDF)
+    # -------------------------------
+    report = {
+        "mode": "compare",
+        "tickers": [s1, s2],
+        "left": {
+            "snapshot": snap1,
+            "financial_metrics": fm1,
+            "analyst_estimates": analyst1,
+            "company_facts": facts1,
+            "news": news1,
+            "institutional": inst1,
+            "insider": insider1,
+        },
+        "right": {
+            "snapshot": snap2,
+            "financial_metrics": fm2,
+            "analyst_estimates": analyst2,
+            "company_facts": facts2,
+            "news": news2,
+            "institutional": inst2,
+            "insider": insider2,
+        },
+    }
+
+    # -------------------------------
+    # TEXT BODY FOR PDF
+    # -------------------------------
+    lines = []
+    lines.append(f"STOCK COMPARISON: {s1} vs {s2}")
+    lines.append("=" * 72)
+
+    lines.append(
+        generate_ai_combined_pair(
+            s1, snap1, fm1, analyst1, facts1,
+            s2, snap2, fm2, analyst2, facts2
+        )
+    )
+
+    # -------------------------------
+    # CHARTS
+    # -------------------------------
+    chart_path = build_compare_charts(s1, s2)
+
+    # -------------------------------
+    # PDF EXPORT
+    # -------------------------------
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = os.path.join(out_dir, f"{t1}_{t2}_{ts}.pdf")
-    export_pdf(f"{t1} vs {t2}", blocks, None, out)
-    return out
+    pdf_path = os.path.join(out_dir, f"{s1}_{s2}_{ts}.pdf")
+
+    export_pdf(
+        text="\n".join(lines),
+        title_line=f"{s1} vs {s2}",
+        chart_path=chart_path,
+        output_path=pdf_path
+    )
+
+    # ✅ RETURN BOTH VALUES
+    return pdf_path, report
+
 
 # ============================================================
 # Ticker lookup (safe stub for UI autocomplete)
@@ -352,3 +425,4 @@ def lookup_tickers(query: str):
             })
 
     return results
+
