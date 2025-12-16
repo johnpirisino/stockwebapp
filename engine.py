@@ -296,7 +296,8 @@ Day Change: {fmt(snapshot['day_change'])} ({fmt(snapshot['day_change_pct'])}%)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = os.path.join(out_dir, f"{ticker}_{ts}.pdf")
     export_pdf(f"{ticker} Report", blocks, None, out)
-    return out
+    return pdf_path, report
+
 
 def run_compare_to_pdf(s1: str, s2: str, out_dir: str):
     s1 = s1.upper()
@@ -425,4 +426,5 @@ def lookup_tickers(query: str):
             })
 
     return results
+
 
